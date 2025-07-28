@@ -16,7 +16,7 @@ SUPABASE_SERVICE_KEY = os.environ.get('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJp
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # OpenAI configuration
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+OPENAI_API_KEY = os.environ.get('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')
 
 @app.get("/health")
 async def health_check():
