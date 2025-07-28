@@ -11,7 +11,7 @@ import asyncio
 app = FastAPI()
 
 # Supabase configuration
-SUPABASE_URL = os.environ.get('https://www.studycompanion.io')
+SUPABASE_URL = os.environ.get('https://zjzhlnzfqpcydfwnoomi.supabase.co')
 SUPABASE_SERVICE_KEY = os.environ.get('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpqemhsbnpmcXBjeWRmd25vb21pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Mjg1NTg2MCwiZXhwIjoyMDY4NDMxODYwfQ.8rlGDO3VslscQ_0cmcic9U6-YrjeOWGrsmF-Kka9K5E')
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
