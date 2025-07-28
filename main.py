@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import os
 import base64
 import requests
@@ -8,6 +9,7 @@ import time
 from typing import List, Dict, Any
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Supabase configuration
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
