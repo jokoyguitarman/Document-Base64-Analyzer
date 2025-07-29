@@ -24,7 +24,7 @@ def health_check():
     return jsonify({'status': 'healthy', 'service': 'ai-processing-microservice'})
 
 @app.route('/process-document', methods=['POST'])
-def process_document():
+async def process_document():
     try:
         data = request.get_json()
         
