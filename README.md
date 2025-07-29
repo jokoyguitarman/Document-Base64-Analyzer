@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Document Base64 Analyzer
 
 A Python Flask microservice for processing document images using OpenAI's GPT-4 Vision API. This service downloads images from Supabase Storage, converts them to base64, and analyzes them using ChatGPT to extract meaningful insights.

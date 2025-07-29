@@ -1,5 +1,8 @@
+fastapi
 Flask
 flask-cors
-openai
-Pillow
+requests
+supabase
 python-dotenv
+gunicorn
+uvicorn
