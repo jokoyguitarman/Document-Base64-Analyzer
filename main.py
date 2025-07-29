@@ -61,12 +61,12 @@ Please structure your response as JSON with these fields:
             })
 
         response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": content
             }],
-            max_tokens=2000
+            max_tokens=3000
         )
 
         analysis_text = response.choices[0].message.content
