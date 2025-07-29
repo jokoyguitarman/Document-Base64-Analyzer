@@ -1,5 +1,6 @@
 fastapi
 Flask
+flask-cors
 requests
 supabase
 python-dotenv
