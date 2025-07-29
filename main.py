@@ -39,118 +39,160 @@ def test_endpoint():
     return jsonify({'message': 'Test endpoint working', 'cors': 'enabled'})
 
 def analyze_images_with_gpt(images_base64: list, num_pages: int, file_type: str) -> dict:
-    """Analyze document images one by one using GPT-4o with better error handling"""
+    """Analyze document images in batches to stay under 30-second timeout"""
     try:
-        print(f"Processing {len(images_base64)} images individually...")
+        print(f"Processing {len(images_base64)} images in optimized batches...")
         
         all_page_analyses = []
         
-        # Process each image individually with retry logic
-        for i, img_base64 in enumerate(images_base64):
-            print(f"Analyzing page {i + 1}/{len(images_base64)}...")
+        # For documents with many pages, process in smaller batches
+        if len(images_base64) > 2:
+            print(f"Document has {len(images_base64)} pages - processing in batches for efficiency")
             
-            content = [
+            # Process first 2 pages together for initial analysis
+            initial_content = [
                 {
                     "type": "text",
-                    "text": f"""You are an expert document analyzer. Analyze page {i + 1} of {num_pages} from this {file_type} document.
+                    "text": f"""Analyze the first 2 pages of this {num_pages}-page {file_type} document. Provide:
+1. Key content and main points from these pages
+2. Important information or data
+3. How these pages relate to the overall document
 
-Please provide a detailed analysis of this specific page including:
-1. What content is on this page
-2. Key information, data, or concepts presented
-3. Any important details, figures, or tables
-4. How this page relates to the overall document
-
-Be thorough and detailed in your analysis. Focus on extracting all meaningful information from this page."""
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{img_base64}"
-                    }
+Be concise but thorough."""
                 }
             ]
+            
+            # Add first 2 images
+            for i in range(min(2, len(images_base64))):
+                initial_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{images_base64[i]}"
+                    }
+                })
+            
+            print("Analyzing first 2 pages...")
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": initial_content
+                }],
+                max_tokens=1500,
+                timeout=20  # Stay well under 30s limit
+            )
+            
+            initial_analysis = response.choices[0].message.content
+            all_page_analyses.append(f"**Pages 1-2 Analysis:**\n{initial_analysis}\n\n")
+            print("✅ Initial analysis completed")
+            
+            # If there are more pages, process them together
+            if len(images_base64) > 2:
+                remaining_content = [
+                    {
+                        "type": "text",
+                        "text": f"""Analyze the remaining {len(images_base64)-2} pages of this {num_pages}-page {file_type} document. 
+Based on the initial analysis: "{initial_analysis[:200]}..."
 
-            # Retry logic for each page
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    print(f"  Attempt {attempt + 1}/{max_retries} for page {i + 1}")
-                    
-                    response = client.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[{
-                            "role": "user",
-                            "content": content
-                        }],
-                        max_tokens=1000,  # 1000 tokens per page as requested
-                        timeout=45  # 45 seconds per page (well under any limits)
-                    )
-
-                    page_analysis = response.choices[0].message.content
-                    all_page_analyses.append(f"**Page {i + 1} Analysis:**\n{page_analysis}\n\n")
-                    print(f"✅ Page {i + 1} analysis completed")
-                    break  # Success, exit retry loop
-                    
-                except Exception as e:
-                    print(f"❌ Error on attempt {attempt + 1} for page {i + 1}: {str(e)}")
-                    if attempt == max_retries - 1:  # Last attempt
-                        all_page_analyses.append(f"**Page {i + 1} Analysis:**\nError analyzing this page after {max_retries} attempts: {str(e)}\n\n")
-                    else:
-                        print(f"  Retrying in 2 seconds...")
-                        time.sleep(2)  # Wait before retry
-        
-        # Combine all page analyses
-        combined_analysis = "\n".join(all_page_analyses)
-        
-        # Now create a comprehensive summary of all pages
-        print("Creating comprehensive summary...")
-        summary_content = [
-            {
-                "type": "text",
-                "text": f"""You are an expert document analyzer. Based on the detailed analysis of all {num_pages} pages of this {file_type} document, please provide:
-
-1. A comprehensive overview of the entire document
-2. A brief summary (2-3 sentences)
-3. Key insights and main takeaways
-4. The elevator pitch (key points in one paragraph)
-
-Please structure your response as JSON with these fields:
-- "content": The comprehensive analysis combining all pages
-- "summary": Brief summary of the entire document
-- "elevator_pitch": Key insights in one paragraph
-
-Here is the detailed analysis of each page:
-
-{combined_analysis}"""
-            }
-        ]
-
-        # Retry logic for final summary
-        for attempt in range(max_retries):
-            try:
-                print(f"  Final summary attempt {attempt + 1}/{max_retries}")
+Provide additional key content and insights from these remaining pages."""
+                    }
+                ]
                 
+                # Add remaining images
+                for i in range(2, len(images_base64)):
+                    remaining_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{images_base64[i]}"
+                        }
+                    })
+                
+                print(f"Analyzing remaining {len(images_base64)-2} pages...")
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[{
                         "role": "user",
-                        "content": summary_content
+                        "content": remaining_content
                     }],
-                    max_tokens=2000,  # 2000 tokens for final summary
-                    timeout=45  # 45 seconds for summary
+                    max_tokens=1500,
+                    timeout=20  # Stay well under 30s limit
                 )
-
-                analysis_text = response.choices[0].message.content
-                print("✅ Final summary completed")
-                break  # Success, exit retry loop
                 
-            except Exception as e:
-                print(f"❌ Error on final summary attempt {attempt + 1}: {str(e)}")
-                if attempt == max_retries - 1:  # Last attempt
-                    analysis_text = combined_analysis  # Use combined analysis as fallback
-                else:
-                    print(f"  Retrying final summary in 2 seconds...")
-                    time.sleep(2)  # Wait before retry
+                remaining_analysis = response.choices[0].message.content
+                all_page_analyses.append(f"**Pages 3-{len(images_base64)} Analysis:**\n{remaining_analysis}\n\n")
+                print("✅ Remaining analysis completed")
+        else:
+            # For 1-2 page documents, process all together
+            content = [
+                {
+                    "type": "text",
+                    "text": f"""Analyze this {num_pages}-page {file_type} document. Provide:
+1. Key content and main points
+2. Important information or data
+3. How the content relates to the overall document
+
+Be concise but thorough."""
+                }
+            ]
+            
+            # Add all images
+            for img_base64 in images_base64:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{img_base64}"
+                    }
+                })
+            
+            print(f"Analyzing all {len(images_base64)} pages together...")
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": content
+                }],
+                max_tokens=2000,
+                timeout=25  # Stay well under 30s limit
+            )
+            
+            combined_analysis = response.choices[0].message.content
+            all_page_analyses.append(f"**Complete Document Analysis:**\n{combined_analysis}\n\n")
+            print("✅ Analysis completed")
+        
+        # Combine all analyses
+        combined_analysis = "\n".join(all_page_analyses)
+        
+        # Create final summary
+        print("Creating final summary...")
+        summary_content = [
+            {
+                "type": "text",
+                "text": f"""Based on the analysis of this {num_pages}-page {file_type} document, provide:
+
+1. A comprehensive overview of the entire document
+2. A brief summary (2-3 sentences)
+3. Key insights in one paragraph
+
+Structure as JSON:
+{{"content": "comprehensive analysis", "summary": "brief summary", "elevator_pitch": "key insights"}}
+
+Document analysis:
+{combined_analysis}"""
+            }
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": summary_content
+            }],
+            max_tokens=1500,
+            timeout=20  # Stay well under 30s limit
+        )
+
+        analysis_text = response.choices[0].message.content
+        print("✅ Final summary completed")
 
         # Try to extract JSON from the response
         try:
