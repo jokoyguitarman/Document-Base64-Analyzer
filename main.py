@@ -34,43 +34,93 @@ def test_endpoint():
     return jsonify({'message': 'Test endpoint working', 'cors': 'enabled'})
 
 def analyze_images_with_gpt(images_base64: list, num_pages: int, file_type: str) -> dict:
+    """Analyze document images one by one using GPT-4o"""
     try:
-        content: list[ChatCompletionMessageParam] = [
+        print(f"Processing {len(images_base64)} images individually...")
+        
+        all_page_analyses = []
+        
+        # Process each image individually
+        for i, img_base64 in enumerate(images_base64):
+            print(f"Analyzing page {i + 1}/{len(images_base64)}...")
+            
+            content = [
+                {
+                    "type": "text",
+                    "text": f"""You are an expert document analyzer. Analyze this page {i + 1} of {num_pages} from a {file_type} document.
+
+Please provide a detailed analysis of this specific page including:
+1. What content is on this page
+2. Key information, data, or concepts presented
+3. Any important details, figures, or tables
+4. How this page relates to the overall document
+
+Be thorough and detailed in your analysis. Focus on extracting all meaningful information from this page."""
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{img_base64}"
+                    }
+                }
+            ]
+
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{
+                        "role": "user",
+                        "content": content
+                    }],
+                    max_tokens=2000
+                )
+
+                page_analysis = response.choices[0].message.content
+                all_page_analyses.append(f"**Page {i + 1} Analysis:**\n{page_analysis}\n\n")
+                print(f"✅ Page {i + 1} analysis completed")
+                
+            except Exception as e:
+                print(f"❌ Error analyzing page {i + 1}: {str(e)}")
+                all_page_analyses.append(f"**Page {i + 1} Analysis:**\nError analyzing this page: {str(e)}\n\n")
+        
+        # Combine all page analyses
+        combined_analysis = "\n".join(all_page_analyses)
+        
+        # Now create a comprehensive summary of all pages
+        print("Creating comprehensive summary...")
+        summary_content = [
             {
                 "type": "text",
-                "text": f"""You are an expert document analyzer. Analyze this {file_type} document with {num_pages} pages and provide:
+                "text": f"""You are an expert document analyzer. Based on the detailed analysis of all {num_pages} pages of this {file_type} document, please provide:
 
-1. A comprehensive analysis of the content
+1. A comprehensive overview of the entire document
 2. A brief summary (2-3 sentences)
-3. Key points and insights
-4. The main topics covered
+3. Key insights and main takeaways
+4. The elevator pitch (key points in one paragraph)
 
 Please structure your response as JSON with these fields:
-- "content": The comprehensive analysis
-- "summary": Brief summary
-- "elevator_pitch": Key insights in one paragraph"""
+- "content": The comprehensive analysis combining all pages
+- "summary": Brief summary of the entire document
+- "elevator_pitch": Key insights in one paragraph
+
+Here is the detailed analysis of each page:
+
+{combined_analysis}"""
             }
         ]
-
-        for img_base64 in images_base64:
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/png;base64,{img_base64}"
-                }
-            })
 
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{
                 "role": "user",
-                "content": content
+                "content": summary_content
             }],
             max_tokens=3000
         )
 
         analysis_text = response.choices[0].message.content
 
+        # Try to extract JSON from the response
         try:
             start_idx = analysis_text.find('{')
             end_idx = analysis_text.rfind('}') + 1
@@ -78,19 +128,19 @@ Please structure your response as JSON with these fields:
                 json_str = analysis_text[start_idx:end_idx]
                 result = json.loads(json_str)
                 return {
-                    'content': result.get('content', analysis_text),
+                    'content': result.get('content', combined_analysis),
                     'summary': result.get('summary', ''),
                     'elevator_pitch': result.get('elevator_pitch', '')
                 }
             else:
                 return {
-                    'content': analysis_text,
+                    'content': combined_analysis,
                     'summary': analysis_text[:200] + '...' if len(analysis_text) > 200 else analysis_text,
                     'elevator_pitch': analysis_text[:300] + '...' if len(analysis_text) > 300 else analysis_text
                 }
         except json.JSONDecodeError:
             return {
-                'content': analysis_text,
+                'content': combined_analysis,
                 'summary': analysis_text[:200] + '...' if len(analysis_text) > 200 else analysis_text,
                 'elevator_pitch': analysis_text[:300] + '...' if len(analysis_text) > 300 else analysis_text
             }
