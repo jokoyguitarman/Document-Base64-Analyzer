@@ -1,1 +1,1 @@
-uvicorn main:app --host 0.0.0.0 --port 10000
+gunicorn main:app --bind 0.0.0.0:10000
