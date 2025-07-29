@@ -34,25 +34,28 @@ def test_endpoint():
     return jsonify({'message': 'Test endpoint working', 'cors': 'enabled'})
 
 def analyze_images_with_gpt(images_base64: list, num_pages: int, file_type: str) -> dict:
-    """Analyze document images one by one using GPT-4o"""
+    """Analyze document images one by one using GPT-4o (Render Pro - 15min timeout)"""
     try:
         print(f"Processing {len(images_base64)} images individually...")
         
         all_page_analyses = []
         
-        # Process each image individually with shorter timeouts
+        # Process each image individually for detailed analysis
         for i, img_base64 in enumerate(images_base64):
             print(f"Analyzing page {i + 1}/{len(images_base64)}...")
             
             content = [
                 {
                     "type": "text",
-                    "text": f"""Analyze page {i + 1} of {num_pages} from this {file_type} document. Focus on:
-1. Main content and key information
-2. Important details, data, or concepts
-3. How this page fits into the overall document
+                    "text": f"""You are an expert document analyzer. Analyze page {i + 1} of {num_pages} from this {file_type} document.
 
-Be concise but thorough."""
+Please provide a detailed analysis of this specific page including:
+1. What content is on this page
+2. Key information, data, or concepts presented
+3. Any important details, figures, or tables
+4. How this page relates to the overall document
+
+Be thorough and detailed in your analysis. Focus on extracting all meaningful information from this page."""
                 },
                 {
                     "type": "image_url",
@@ -69,36 +72,40 @@ Be concise but thorough."""
                         "role": "user",
                         "content": content
                     }],
-                    max_tokens=1000,  # Limited to 1000 tokens per page
-                    timeout=1800  # 30 minutes timeout
+                    max_tokens=1000,  # 1000 tokens per page as requested
+                    timeout=600  # 10 minutes per page (well under 15min limit)
                 )
 
                 page_analysis = response.choices[0].message.content
-                all_page_analyses.append(f"**Page {i + 1}:** {page_analysis}")
+                all_page_analyses.append(f"**Page {i + 1} Analysis:**\n{page_analysis}\n\n")
                 print(f"✅ Page {i + 1} analysis completed")
                 
             except Exception as e:
                 print(f"❌ Error analyzing page {i + 1}: {str(e)}")
-                all_page_analyses.append(f"**Page {i + 1}:** Error analyzing this page: {str(e)}")
+                all_page_analyses.append(f"**Page {i + 1} Analysis:**\nError analyzing this page: {str(e)}\n\n")
         
         # Combine all page analyses
-        combined_analysis = "\n\n".join(all_page_analyses)
+        combined_analysis = "\n".join(all_page_analyses)
         
-        # Create a comprehensive summary with shorter prompt
+        # Now create a comprehensive summary of all pages
         print("Creating comprehensive summary...")
         summary_content = [
             {
                 "type": "text",
-                "text": f"""Based on the analysis of this {num_pages}-page {file_type} document, provide:
+                "text": f"""You are an expert document analyzer. Based on the detailed analysis of all {num_pages} pages of this {file_type} document, please provide:
 
 1. A comprehensive overview of the entire document
 2. A brief summary (2-3 sentences)
-3. Key insights in one paragraph
+3. Key insights and main takeaways
+4. The elevator pitch (key points in one paragraph)
 
-Structure as JSON:
-{{"content": "comprehensive analysis", "summary": "brief summary", "elevator_pitch": "key insights"}}
+Please structure your response as JSON with these fields:
+- "content": The comprehensive analysis combining all pages
+- "summary": Brief summary of the entire document
+- "elevator_pitch": Key insights in one paragraph
 
-Document analysis:
+Here is the detailed analysis of each page:
+
 {combined_analysis}"""
             }
         ]
@@ -109,8 +116,8 @@ Document analysis:
                 "role": "user",
                 "content": summary_content
             }],
-            max_tokens=2000,  # Reduced from 3000
-            timeout=1800  # 30 minutes timeout
+            max_tokens=2000,  # 2000 tokens for final summary
+            timeout=600  # 10 minutes for summary (well under 15min limit)
         )
 
         analysis_text = response.choices[0].message.content
