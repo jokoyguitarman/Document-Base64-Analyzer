@@ -6,69 +6,63 @@ import json
 from PIL import Image
 import openai
 import time
+import threading
+import uuid
+from datetime import datetime
+import queue
 
 app = Flask(__name__)
 CORS(app)
 
-# Configure OpenAI client with better timeout settings
+# Configure OpenAI client
 client = openai.OpenAI(
     api_key=os.getenv('OPENAI_API_KEY'),
-    timeout=60.0,  # 60 seconds for the entire request
-    max_retries=3  # Retry failed requests
+    timeout=60.0,
+    max_retries=3
 )
 
-@app.route('/', methods=['GET'])
-def root():
-    return jsonify({
-        'message': 'AI Processing Microservice',
-        'status': 'running',
-        'endpoints': {
-            'health': '/health',
-            'test': '/test',
-            'process_document': '/process-document'
-        },
-        'version': '1.0.0'
-    })
+# Background job processing
+job_queue = queue.Queue()
+job_results = {}
+job_status = {}
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy', 
-        'service': 'ai-processing-microservice',
-        'timeout': '900s (15 minutes)',
-        'worker_timeout': '900s',
-        'max_pages_per_document': 'unlimited (time-based)',
-        'processing_strategy': 'one page per API call'
-    })
-
-@app.route('/test', methods=['GET'])
-def test_endpoint():
-    return jsonify({'message': 'Test endpoint working', 'cors': 'enabled'})
-
-def analyze_images_with_gpt(images_base64: list, num_pages: int, file_type: str) -> dict:
-    """Analyze document images one page at a time with proper timeout handling"""
+def process_job_in_background(job_id, images_base64, num_pages, file_type, user_id):
+    """Process a job in the background"""
     try:
-        print(f"Processing {len(images_base64)} images - one page per API call")
+        print(f"Starting background processing for job {job_id}")
+        job_status[job_id] = {
+            'status': 'processing',
+            'progress': 0,
+            'total_pages': len(images_base64),
+            'processed_pages': 0,
+            'started_at': datetime.now().isoformat(),
+            'updated_at': datetime.now().isoformat()
+        }
         
         all_page_analyses = []
         start_time = time.time()
-        max_total_time = 840  # 14 minutes (leaving 1 minute buffer)
+        max_total_time = 840  # 14 minutes
         
         # Process each page individually
         for i, img_base64 in enumerate(images_base64):
             page_num = i + 1
-            print(f"Analyzing page {page_num}/{len(images_base64)}...")
+            print(f"Job {job_id}: Analyzing page {page_num}/{len(images_base64)}...")
+            
+            # Update progress
+            job_status[job_id]['progress'] = int((page_num - 1) / len(images_base64) * 100)
+            job_status[job_id]['processed_pages'] = page_num - 1
+            job_status[job_id]['updated_at'] = datetime.now().isoformat()
             
             # Check if we're running out of time
             elapsed_time = time.time() - start_time
             remaining_time = max_total_time - elapsed_time
             
-            if remaining_time < 60:  # Less than 1 minute remaining
-                print(f"⚠️ Time limit approaching ({remaining_time:.1f}s remaining) - stopping processing")
+            if remaining_time < 60:
+                print(f"Job {job_id}: Time limit approaching - stopping processing")
                 break
             
-            # Calculate timeout for this page (max 60 seconds per page)
-            page_timeout = min(60, remaining_time - 30)  # Leave 30s buffer
+            # Calculate timeout for this page
+            page_timeout = min(60, remaining_time - 30)
             
             try:
                 content = [
@@ -96,24 +90,25 @@ Be concise but thorough."""
                 
                 page_analysis = response.choices[0].message.content
                 all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_analysis}\n\n")
-                print(f"✅ Page {page_num} analysis completed")
+                print(f"Job {job_id}: ✅ Page {page_num} analysis completed")
                 
             except Exception as e:
-                print(f"❌ Error analyzing page {page_num}: {str(e)}")
+                print(f"Job {job_id}: ❌ Error analyzing page {page_num}: {str(e)}")
                 all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {str(e)}\n\n")
                 continue
         
-        # Combine all analyses
+        # Combine analyses
         combined_analysis = "\n".join(all_page_analyses)
         
-        # Create final summary if we have time
+        # Create final summary if time permits
         elapsed_time = time.time() - start_time
         if elapsed_time < max_total_time - 30:
-            print("Creating final summary...")
-            summary_content = [
-                {
-                    "type": "text",
-                    "text": f"""Based on the analysis of this {num_pages}-page {file_type} document, provide:
+            print(f"Job {job_id}: Creating final summary...")
+            try:
+                summary_content = [
+                    {
+                        "type": "text",
+                        "text": f"""Based on the analysis of this {num_pages}-page {file_type} document, provide:
 
 1. A brief summary (2-3 sentences)
 2. Key insights in one paragraph
@@ -123,10 +118,9 @@ Structure as JSON:
 
 Document analysis:
 {combined_analysis}"""
-                }
-            ]
+                    }
+                ]
 
-            try:
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[{"role": "user", "content": summary_content}],
@@ -135,7 +129,7 @@ Document analysis:
                 )
 
                 analysis_text = response.choices[0].message.content
-                print("✅ Final summary completed")
+                print(f"Job {job_id}: ✅ Final summary completed")
 
                 # Try to extract JSON from the response
                 try:
@@ -144,46 +138,115 @@ Document analysis:
                     if start_idx != -1 and end_idx != 0:
                         json_str = analysis_text[start_idx:end_idx]
                         result = json.loads(json_str)
-                        return {
+                        final_result = {
                             'content': combined_analysis,
                             'summary': result.get('summary', ''),
                             'elevator_pitch': result.get('elevator_pitch', '')
                         }
                     else:
-                        return {
+                        final_result = {
                             'content': combined_analysis,
                             'summary': analysis_text[:200] + '...' if len(analysis_text) > 200 else analysis_text,
                             'elevator_pitch': analysis_text[:300] + '...' if len(analysis_text) > 300 else analysis_text
                         }
                 except json.JSONDecodeError:
-                    return {
+                    final_result = {
                         'content': combined_analysis,
                         'summary': analysis_text[:200] + '...' if len(analysis_text) > 200 else analysis_text,
                         'elevator_pitch': analysis_text[:300] + '...' if len(analysis_text) > 300 else analysis_text
                     }
             except Exception as e:
-                print(f"❌ Error creating summary: {str(e)}")
-                return {
+                print(f"Job {job_id}: ❌ Error creating summary: {str(e)}")
+                final_result = {
                     'content': combined_analysis,
                     'summary': f"Analysis of {num_pages}-page {file_type} document completed. Processed {len(all_page_analyses)} pages.",
                     'elevator_pitch': f"Document analysis completed with {len(all_page_analyses)} pages processed successfully."
                 }
         else:
-            # Time is running out, return partial results
-            print("⚠️ Time limit approaching - returning partial results without summary")
-            return {
+            print(f"Job {job_id}: ⚠️ Time limit approaching - returning partial results")
+            final_result = {
                 'content': combined_analysis,
                 'summary': f"Analysis of {num_pages}-page {file_type} document completed. Processed {len(all_page_analyses)} pages.",
                 'elevator_pitch': f"Document analysis completed with {len(all_page_analyses)} pages processed successfully."
             }
-
-    except Exception as e:
-        print(f"Error analyzing images with GPT: {str(e)}")
-        return {
-            'content': f"Error analyzing document: {str(e)}",
-            'summary': "Analysis failed",
-            'elevator_pitch': "Unable to process document"
+        
+        # Store results
+        job_results[job_id] = {
+            'status': 'completed',
+            'result': final_result,
+            'completed_at': datetime.now().isoformat(),
+            'processing_time': elapsed_time,
+            'pages_processed': len(all_page_analyses)
         }
+        
+        # Update final status
+        job_status[job_id]['status'] = 'completed'
+        job_status[job_id]['progress'] = 100
+        job_status[job_id]['processed_pages'] = len(images_base64)
+        job_status[job_id]['updated_at'] = datetime.now().isoformat()
+        
+        print(f"Job {job_id}: ✅ Processing completed successfully")
+        
+    except Exception as e:
+        print(f"Job {job_id}: ❌ Processing failed: {str(e)}")
+        job_results[job_id] = {
+            'status': 'failed',
+            'error': str(e),
+            'failed_at': datetime.now().isoformat()
+        }
+        job_status[job_id]['status'] = 'failed'
+        job_status[job_id]['updated_at'] = datetime.now().isoformat()
+
+def background_worker():
+    """Background worker to process jobs"""
+    while True:
+        try:
+            job_data = job_queue.get(timeout=1)
+            if job_data is None:
+                break
+            
+            job_id, images_base64, num_pages, file_type, user_id = job_data
+            process_job_in_background(job_id, images_base64, num_pages, file_type, user_id)
+            job_queue.task_done()
+            
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"Background worker error: {str(e)}")
+            continue
+
+# Start background worker
+worker_thread = threading.Thread(target=background_worker, daemon=True)
+worker_thread.start()
+
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({
+        'message': 'AI Processing Microservice',
+        'status': 'running',
+        'endpoints': {
+            'health': '/health',
+            'test': '/test',
+            'process_document': '/process-document',
+            'job_status': '/job-status/<job_id>'
+        },
+        'version': '2.0.0',
+        'processing': 'background'
+    })
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy', 
+        'service': 'ai-processing-microservice',
+        'processing': 'background',
+        'queue_size': job_queue.qsize(),
+        'active_jobs': len([j for j in job_status.values() if j['status'] == 'processing'])
+    })
+
+@app.route('/test', methods=['GET'])
+def test_endpoint():
+    return jsonify({'message': 'Test endpoint working', 'cors': 'enabled'})
 
 @app.route('/process-document', methods=['POST'])
 def process_document():
@@ -200,43 +263,38 @@ def process_document():
         fallback_text = data.get('fallback_text', '')
         images_base64 = data.get('images_base64', [])
 
-        print(f"Processing document: job_id={job_id}, user_id={user_id}, pages={num_pages}, type={file_type}")
-        print(f"Received {len(images_base64)} images and {len(image_urls)} image URLs")
+        print(f"Received document processing request: job_id={job_id}, user_id={user_id}, pages={num_pages}")
 
         if not job_id or not user_id:
             return jsonify({'error': 'Missing required fields: job_id, user_id'}), 400
 
         if images_base64:
-            try:
-                result = analyze_images_with_gpt(images_base64, num_pages, file_type)
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Document processed successfully with GPT-4 Vision',
-                    'content': result['content'],
-                    'summary': result['summary'],
-                    'elevator_pitch': result['elevator_pitch'],
-                    'job_id': job_id,
-                    'user_id': user_id,
-                    'num_pages': num_pages,
-                    'file_type': file_type,
-                    'pages_processed': len(images_base64)
-                })
-            except Exception as e:
-                print(f"Error in image analysis: {str(e)}")
-                return jsonify({
-                    'status': 'partial_success',
-                    'message': f'Document processing encountered an error: {str(e)}',
-                    'content': f'Error during processing: {str(e)}',
-                    'summary': 'Processing failed',
-                    'elevator_pitch': 'Unable to complete document analysis',
-                    'job_id': job_id,
-                    'user_id': user_id,
-                    'num_pages': num_pages,
-                    'file_type': file_type,
-                    'pages_processed': 0
-                }), 500
+            # Queue the job for background processing
+            job_queue.put((job_id, images_base64, num_pages, file_type, user_id))
+            
+            # Initialize job status
+            job_status[job_id] = {
+                'status': 'queued',
+                'progress': 0,
+                'total_pages': len(images_base64),
+                'processed_pages': 0,
+                'queued_at': datetime.now().isoformat(),
+                'updated_at': datetime.now().isoformat()
+            }
+            
+            return jsonify({
+                'status': 'queued',
+                'message': 'Document processing job queued successfully',
+                'job_id': job_id,
+                'user_id': user_id,
+                'num_pages': num_pages,
+                'file_type': file_type,
+                'queue_position': job_queue.qsize(),
+                'status_endpoint': f'/job-status/{job_id}'
+            })
 
         elif fallback_text.strip():
+            # For text-only processing, do it immediately
             try:
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -271,6 +329,28 @@ def process_document():
     except Exception as e:
         print(f"Error in process_document: {str(e)}")
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+
+@app.route('/job-status/<job_id>', methods=['GET'])
+def get_job_status(job_id):
+    """Get the status of a background job"""
+    try:
+        if job_id not in job_status:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        status = job_status[job_id].copy()
+        
+        # If job is completed, include results
+        if status['status'] == 'completed' and job_id in job_results:
+            status['result'] = job_results[job_id]['result']
+            status['processing_time'] = job_results[job_id]['processing_time']
+            status['pages_processed'] = job_results[job_id]['pages_processed']
+        elif status['status'] == 'failed' and job_id in job_results:
+            status['error'] = job_results[job_id]['error']
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        return jsonify({'error': f'Error retrieving job status: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
