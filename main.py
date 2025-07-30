@@ -7,8 +7,13 @@ from PIL import Image
 import openai
 import time
 from datetime import datetime
-from tasks import process_document_job
+from dotenv import load_dotenv
 from celery_config import celery_app
+import tasks  # Import tasks to register them with Celery
+from tasks import process_document_job
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)

@@ -1,5 +1,9 @@
 import os
 from celery import Celery
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure Celery
 celery_app = Celery('ai_processing')
@@ -22,5 +26,5 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-# Auto-discover tasks
-celery_app.autodiscover_tasks(['tasks']) 
+# Import tasks directly to avoid circular imports
+# Tasks will be imported when celery_config is imported 

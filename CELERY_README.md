@@ -88,8 +88,36 @@ The Procfile automatically starts both processes:
 
 ## Environment Variables
 
-- `REDIS_URL`: Redis connection string (default: redis://localhost:6379/0)
+### Required Variables
+
+**Both the microservice and Celery worker need these environment variables:**
+
+- `REDIS_URL`: Redis connection string
+  - Local development: `redis://localhost:6379/0`
+  - Production: `redis://your-redis-instance-url:port`
 - `OPENAI_API_KEY`: Your OpenAI API key
+
+### Setting Environment Variables
+
+**Local Development:**
+Create a `.env` file in the `ai-processing-microservice/` directory:
+```bash
+# .env file
+REDIS_URL=redis://localhost:6379/0
+OPENAI_API_KEY=your_openai_api_key_here
+PORT=10000
+```
+
+**Production Deployment (Render):**
+Set environment variables in your deployment platform:
+- Go to your service settings
+- Add environment variables:
+  - `REDIS_URL`: Your Redis instance URL
+  - `OPENAI_API_KEY`: Your OpenAI API key
+
+**Why Both Services Need REDIS_URL:**
+- **Microservice**: Queues tasks to Redis broker and checks task status
+- **Celery Worker**: Connects to Redis broker to pick up tasks and store results
 
 ## Task Processing Flow
 
