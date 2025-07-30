@@ -246,7 +246,7 @@ Document analysis:
         
         # Store results in database via webhook
         try:
-            webhook_url = os.getenv('WEBHOOK_URL', 'https://study-companion-ai.vercel.app/api/update-job-results')
+            webhook_url = os.getenv('WEBHOOK_URL', 'https://studycompanion.io/api/update-job-results')
             webhook_data = {
                 'job_id': job_id,
                 'user_id': user_id,
