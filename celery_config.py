@@ -24,7 +24,5 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_max_tasks_per_child=1000,
     broker_connection_retry_on_startup=True,
-)
-
-# Import tasks directly to avoid circular imports
-# Tasks will be imported when celery_config is imported 
+    include=['tasks']  # Include the tasks module
+) 
