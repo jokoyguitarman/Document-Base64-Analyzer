@@ -13,6 +13,56 @@ client = openai.OpenAI(
     max_retries=3
 )
 
+def analyze_page_sync(base64_str, page_number, total_pages, file_type, job_id):
+    """Analyze a single page synchronously (non-Celery version)"""
+    try:
+        print(f"Job {job_id}: Analyzing page {page_number}/{total_pages}")
+        
+        if not base64_str:
+            raise ValueError("task_id must not be empty. Got None instead.")
+        
+        content = [
+            {
+                "type": "text",
+                "text": f"""Analyze page {page_number} of this {total_pages}-page {file_type} document. Provide:
+1. Key content and main points from this page
+2. Important information or data
+3. How this page relates to the overall document
+
+Be concise but thorough."""
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{base64_str}"}
+            }
+        ]
+        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": content}],
+            max_tokens=1500,
+            timeout=60
+        )
+        
+        page_analysis = response.choices[0].message.content
+        print(f"Job {job_id}: ✅ Page {page_number} analysis completed")
+        
+        return {
+            'page_number': page_number,
+            'analysis': page_analysis,
+            'status': 'completed',
+            'job_id': job_id
+        }
+        
+    except Exception as e:
+        print(f"Job {job_id}: ❌ Error analyzing page {page_number}: {str(e)}")
+        return {
+            'page_number': page_number,
+            'error': str(e),
+            'status': 'failed',
+            'job_id': job_id
+        }
+
 @celery_app.task(bind=True)
 def analyze_page(self, base64_str, page_number, total_pages, file_type, job_id):
     """Analyze a single page in the background"""
@@ -109,7 +159,7 @@ def process_document_job(self, job_id, images_base64, num_pages, file_type, user
             
             # Analyze this page directly (synchronous) instead of using .delay()
             try:
-                page_data = analyze_page(img_base64, page_num, num_pages, file_type, job_id)
+                page_data = analyze_page_sync(img_base64, page_num, num_pages, file_type, job_id)
                 
                 if page_data['status'] == 'completed':
                     all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_data['analysis']}\n\n")
@@ -196,7 +246,7 @@ Document analysis:
         
         # Store results in database via webhook
         try:
-            webhook_url = os.getenv('WEBHOOK_URL', 'https://your-app.vercel.app/api/update-job-results')
+            webhook_url = os.getenv('WEBHOOK_URL', 'https://study-companion-ai.vercel.app/api/update-job-results')
             webhook_data = {
                 'job_id': job_id,
                 'user_id': user_id,

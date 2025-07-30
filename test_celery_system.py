@@ -12,7 +12,8 @@ from PIL import Image
 import io
 
 # Configuration
-BASE_URL = "http://localhost:10000"  # Change this to your deployed URL
+import os
+BASE_URL = os.getenv('TEST_BASE_URL', "https://document-base64-analyzer.onrender.com")  # Set TEST_BASE_URL env var for production
 TEST_IMAGE_SIZE = (100, 100)  # Small test image
 
 def create_test_image():
