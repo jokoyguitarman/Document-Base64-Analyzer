@@ -24,12 +24,23 @@ def analyze_page_sync(base64_str, page_number, total_pages, file_type, job_id):
         content = [
             {
                 "type": "text",
-                "text": f"""Analyze page {page_number} of this {total_pages}-page {file_type} document. Provide:
-1. Key content and main points from this page
-2. Important information or data
-3. How this page relates to the overall document
+                "text": f"""Act as a subject matter expert and master educator. I want you to help me understand the content in this document or dataset as if you're teaching it to someone who is serious about learning — someone who doesn't just want surface-level summaries, but wants to fully grasp the meaning, implications, and logic behind it.
 
-Be concise but thorough."""
+For each section, page, or visual (e.g. table, chart, slide, paragraph):
+
+Teach, don't just summarize. Begin by identifying the main idea or argument. Then walk me through it clearly and patiently, as if preparing me to teach it to someone else.
+
+Interpret the data or visuals. Don't just describe what's shown — help me understand what comparisons are being made, what insights are hidden in the data, and what it reveals that isn't immediately obvious.
+
+Add expert insight. Expand with deeper context, cross-references, or real-world applications. Explain assumptions, limitations, or nuance that an expert would naturally consider.
+
+Clarify and anticipate confusion. If any concept might be complex, counterintuitive, or misinterpreted, break it down further. Use analogies, examples, or step-by-step logic to reinforce the idea.
+
+Extract meaning and relevance. Conclude by explaining the significance — how this changes our understanding, why it matters, or how it connects to a larger framework.
+
+I don't mind if the explanations are long — in fact, I prefer detailed, information-rich responses over short ones. Prioritize clarity, completeness, and depth over brevity. Speak like an expert guiding a serious learner in a deep-dive session or masterclass. Please don't start with "this document" "this page" "this material", talk to me as if you're not reading it off a material I provided.
+
+Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach."""
             },
             {
                 "type": "image_url",
@@ -83,12 +94,23 @@ def analyze_page(self, base64_str, page_number, total_pages, file_type, job_id):
         content = [
             {
                 "type": "text",
-                "text": f"""Analyze page {page_number} of this {total_pages}-page {file_type} document. Provide:
-1. Key content and main points from this page
-2. Important information or data
-3. How this page relates to the overall document
+                "text": f"""Act as a subject matter expert and master educator. I want you to help me understand the content in this document or dataset as if you're teaching it to someone who is serious about learning — someone who doesn't just want surface-level summaries, but wants to fully grasp the meaning, implications, and logic behind it.
 
-Be concise but thorough."""
+For each section, page, or visual (e.g. table, chart, slide, paragraph):
+
+Teach, don't just summarize. Begin by identifying the main idea or argument. Then walk me through it clearly and patiently, as if preparing me to teach it to someone else.
+
+Interpret the data or visuals. Don't just describe what's shown — help me understand what comparisons are being made, what insights are hidden in the data, and what it reveals that isn't immediately obvious.
+
+Add expert insight. Expand with deeper context, cross-references, or real-world applications. Explain assumptions, limitations, or nuance that an expert would naturally consider.
+
+Clarify and anticipate confusion. If any concept might be complex, counterintuitive, or misinterpreted, break it down further. Use analogies, examples, or step-by-step logic to reinforce the idea.
+
+Extract meaning and relevance. Conclude by explaining the significance — how this changes our understanding, why it matters, or how it connects to a larger framework.
+
+I don't mind if the explanations are long — in fact, I prefer detailed, information-rich responses over short ones. Prioritize clarity, completeness, and depth over brevity. Speak like an expert guiding a serious learner in a deep-dive session or masterclass. Please don't start with "this document" "this page" "this material", talk to me as if you're not reading it off a material I provided.
+
+Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach."""
             },
             {
                 "type": "image_url",
