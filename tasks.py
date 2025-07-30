@@ -3,6 +3,7 @@ import json
 import time
 from datetime import datetime
 import openai
+import requests
 from celery_config import celery_app
 
 # Configure OpenAI client
@@ -106,14 +107,17 @@ def process_document_job(self, job_id, images_base64, num_pages, file_type, user
                 }
             )
             
-            # Analyze this page
-            page_result = analyze_page.delay(img_base64, page_num, num_pages, file_type, job_id)
-            page_data = page_result.get(timeout=60)  # Wait up to 60 seconds per page
-            
-            if page_data['status'] == 'completed':
-                all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_data['analysis']}\n\n")
-            else:
-                all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {page_data['error']}\n\n")
+            # Analyze this page directly (synchronous) instead of using .delay()
+            try:
+                page_data = analyze_page(img_base64, page_num, num_pages, file_type, job_id)
+                
+                if page_data['status'] == 'completed':
+                    all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_data['analysis']}\n\n")
+                else:
+                    all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {page_data['error']}\n\n")
+            except Exception as e:
+                print(f"Job {job_id}: ❌ Error analyzing page {page_num}: {str(e)}")
+                all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {str(e)}\n\n")
         
         # Combine analyses
         combined_analysis = "\n".join(all_page_analyses)
@@ -189,6 +193,27 @@ Document analysis:
             }
         
         processing_time = time.time() - start_time
+        
+        # Store results in database via webhook
+        try:
+            webhook_url = os.getenv('WEBHOOK_URL', 'https://your-app.vercel.app/api/update-job-results')
+            webhook_data = {
+                'job_id': job_id,
+                'user_id': user_id,
+                'status': 'completed',
+                'result': final_result,
+                'processing_time': processing_time,
+                'pages_processed': len(all_page_analyses),
+                'completed_at': datetime.now().isoformat()
+            }
+            
+            response = requests.post(webhook_url, json=webhook_data, timeout=30)
+            if response.status_code == 200:
+                print(f"Job {job_id}: ✅ Results stored in database")
+            else:
+                print(f"Job {job_id}: ⚠️ Failed to store results in database: {response.status_code}")
+        except Exception as e:
+            print(f"Job {job_id}: ⚠️ Error storing results in database: {str(e)}")
         
         return {
             'status': 'completed',
