@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 import openai
 import requests
-import textToSpeech
+from google.cloud import texttospeech
 import fs
 from celery_config import celery_app
 
@@ -589,7 +589,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
                 f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
         
-        client_tts = textToSpeech.TextToSpeechClient()
+        client_tts = texttospeech.TextToSpeechClient()
         
         # Helper to split text into <=5000 byte chunks
         def split_text_by_bytes(text, max_bytes):
