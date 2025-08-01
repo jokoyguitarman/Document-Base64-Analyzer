@@ -5,7 +5,6 @@ from datetime import datetime
 import openai
 import requests
 from google.cloud import texttospeech
-import fs
 from celery_config import celery_app
 
 # Configure OpenAI client
