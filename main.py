@@ -10,7 +10,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from celery_config import celery_app
 import tasks  # Import tasks to register them with Celery
-from tasks import process_document_job
+from tasks import process_document_job, generate_audio_job
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +34,7 @@ def root():
             'health': '/health',
             'test': '/test',
             'process_document': '/process-document',
+            'generate_audio': '/generate-audio',
             'job_status': '/job-status/<job_id>'
         },
         'version': '3.0.0',
@@ -139,6 +140,43 @@ def process_document():
     except Exception as e:
         print(f"Error in process_document: {str(e)}")
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+
+@app.route('/generate-audio', methods=['POST'])
+def generate_audio():
+    """Queue audio generation job for background processing"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        job_id = data.get('job_id')
+        document_id = data.get('document_id')
+        user_id = data.get('user_id')
+        voice = data.get('voice', 'en-US-Studio-Q')
+
+        print(f"Received audio generation request: job_id={job_id}, document_id={document_id}, user_id={user_id}")
+
+        if not job_id or not document_id or not user_id:
+            return jsonify({'error': 'Missing required fields: job_id, document_id, user_id'}), 400
+
+        # Queue the audio generation job for background processing using Celery
+        task = generate_audio_job.delay(job_id, document_id, user_id, voice)
+        
+        return jsonify({
+            'status': 'queued',
+            'message': 'Audio generation job queued successfully',
+            'job_id': job_id,
+            'task_id': task.id,
+            'user_id': user_id,
+            'document_id': document_id,
+            'voice': voice,
+            'status_endpoint': f'/job-status/{job_id}',
+            'task_endpoint': f'/task-status/{task.id}'
+        })
+
+    except Exception as e:
+        print(f"Error in generate_audio: {str(e)}")
+        return jsonify({'error': f'Audio generation failed: {str(e)}'}), 500
 
 @app.route('/job-status/<job_id>', methods=['GET'])
 def get_job_status(job_id):
