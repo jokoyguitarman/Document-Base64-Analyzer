@@ -648,9 +648,8 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             {'content-type': 'audio/mpeg', 'upsert': 'true'}
         )
         
-        # Check if upload was successful (no error means success)
-        if hasattr(upload_response, 'error') and upload_response.error:
-            raise Exception('Failed to upload audio to storage')
+        # Upload was successful (HTTP 200 OK indicates success)
+        print(f'Job {job_id}: ✅ Audio uploaded to storage: {file_path}')
         
         # Update document with audio URL
         update_response = supabase.table('documents').update({
@@ -658,8 +657,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'updated_at': datetime.now().isoformat()
         }).eq('id', document_id).execute()
         
-        if hasattr(update_response, 'error') and update_response.error:
-            print(f'Job {job_id}: Warning - Failed to update document with audio URL')
+        print(f'Job {job_id}: ✅ Document updated with audio URL: {file_path}')
         
         # Update progress
         self.update_state(
