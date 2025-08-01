@@ -544,11 +544,11 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         supabase: Client = create_client(supabase_url, supabase_key)
         
         # Fetch document
-        response = supabase.table('documents').select('content, summary').eq('id', document_id).single()
-        if response.error or not response.data:
+        response = supabase.table('documents').select('content, summary').eq('id', document_id).execute()
+        if not response.data or len(response.data) == 0:
             raise Exception('Document not found')
         
-        document = response.data
+        document = response.data[0]
         document_content = document.get('content') or document.get('summary') or ''
         
         if not document_content.strip():
