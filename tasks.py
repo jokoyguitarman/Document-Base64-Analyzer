@@ -645,7 +645,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         upload_response = supabase.storage.from_('documents').upload(
             file_path,
             audio_buffer,
-            {'content-type': 'audio/mpeg', 'upsert': True}
+            {'content-type': 'audio/mpeg', 'upsert': 'true'}
         )
         
         if upload_response.error:
