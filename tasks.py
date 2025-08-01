@@ -616,9 +616,9 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
                 'voice': {
                     'language_code': 'en-US',
                     'name': voice,
-                    'ssml_gender': 'MALE' if voice == 'en-US-Studio-Q' else 'FEMALE'
+                    'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
                 },
-                'audio_config': {'audio_encoding': 'MP3'},
+                'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
             })
             
             if not response_tts.audio_content:
