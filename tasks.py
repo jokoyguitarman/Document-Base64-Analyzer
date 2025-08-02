@@ -717,4 +717,194 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'failed_at': datetime.now().isoformat(),
             'job_id': job_id,
             'user_id': user_id
+        }
+
+@celery_app.task(bind=True)
+def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q'):
+    """Generate reading companion audio from document content using direct text-to-speech"""
+    try:
+        print(f'Job {job_id}: Starting reading companion audio generation for document {document_id}')
+        
+        # Update task state
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 0,
+                'total': 3,
+                'status': 'Fetching document content',
+                'job_id': job_id
+            }
+        )
+        
+        # Fetch document content from Supabase
+        from supabase import create_client, Client
+        
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+        
+        if not supabase_url or not supabase_key:
+            raise Exception('Missing Supabase credentials')
+        
+        supabase: Client = create_client(supabase_url, supabase_key)
+        
+        # Fetch document - use content or summary for reading companion
+        response = supabase.table('documents').select('content, summary').eq('id', document_id).execute()
+        if not response.data or len(response.data) == 0:
+            raise Exception('Document not found')
+        
+        document = response.data[0]
+        # For reading companion, prefer content over summary, but use summary if content is not available
+        document_content = document.get('content') or document.get('summary') or ''
+        
+        if not document_content.strip():
+            raise Exception('Document has no content to generate reading companion audio from')
+        
+        # Update progress
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 1,
+                'total': 3,
+                'status': 'Generating reading companion audio',
+                'job_id': job_id
+            }
+        )
+        
+        # Initialize Google TTS
+        # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
+        if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+            key_path = '/tmp/google-tts-key.json'
+            with open(key_path, 'w') as f:
+                f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
+        
+        client_tts = texttospeech.TextToSpeechClient()
+        
+        # Helper to split text into <=5000 byte chunks
+        def split_text_by_bytes(text, max_bytes):
+            encoder = text.encode('utf-8')
+            chunks = []
+            current = ''
+            for char in text:
+                test = current + char
+                if test.encode('utf-8').__sizeof__() > max_bytes:
+                    chunks.append(current)
+                    current = char
+                else:
+                    current = test
+            if current:
+                chunks.append(current)
+            return chunks
+        
+        max_tts_bytes = 5000
+        text_chunks = split_text_by_bytes(document_content, max_tts_bytes)
+        audio_buffers = []
+        
+        for chunk in text_chunks:
+            response_tts = client_tts.synthesize_speech({
+                'input': {'text': chunk},
+                'voice': {
+                    'language_code': 'en-US',
+                    'name': voice,
+                    'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                },
+                'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+            })
+            
+            if not response_tts.audio_content:
+                raise Exception('No audio content returned from Google TTS')
+            
+            audio_buffers.append(response_tts.audio_content)
+        
+        audio_buffer = b''.join(audio_buffers)
+        
+        # Update progress
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 2,
+                'total': 3,
+                'status': 'Uploading reading companion audio to storage',
+                'job_id': job_id
+            }
+        )
+        
+        # Upload to Supabase Storage with reading companion naming
+        file_path = f'audio/{document_id}-reading-{int(time.time())}.mp3'
+        
+        upload_response = supabase.storage.from_('documents').upload(
+            file_path,
+            audio_buffer,
+            {'content-type': 'audio/mpeg', 'upsert': 'true'}
+        )
+        
+        # Upload was successful (HTTP 200 OK indicates success)
+        print(f'Job {job_id}: ✅ Reading companion audio uploaded to storage: {file_path}')
+        
+        # Update document with reading companion audio URL
+        update_response = supabase.table('documents').update({
+            'reading_companion_audio_url': file_path,
+            'updated_at': datetime.now().isoformat()
+        }).eq('id', document_id).execute()
+        
+        print(f'Job {job_id}: ✅ Document updated with reading companion audio URL: {file_path}')
+        
+        # Update progress
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 3,
+                'total': 3,
+                'status': 'Reading companion audio generation completed',
+                'job_id': job_id
+            }
+        )
+        
+        # Store results via webhook
+        try:
+            webhook_url = os.getenv('WEBHOOK_URL', 'https://studycompanion.io/api/update-job-results')
+            webhook_data = {
+                'job_id': job_id,
+                'user_id': user_id,
+                'status': 'completed',
+                'result': {
+                    'audio_url': file_path,
+                    'content_length': len(document_content),
+                    'is_reading_companion': True,
+                    'generated_script': False
+                },
+                'processing_time': time.time(),
+                'completed_at': datetime.now().isoformat()
+            }
+            
+            response = requests.post(webhook_url, json=webhook_data, timeout=30)
+            if response.status_code == 200:
+                print(f'Job {job_id}: ✅ Results stored in database')
+            else:
+                print(f'Job {job_id}: ⚠️ Failed to store results in database: {response.status_code}')
+        except Exception as e:
+            print(f'Job {job_id}: ⚠️ Error storing results in database: {str(e)}')
+        
+        return {
+            'status': 'completed',
+            'result': {
+                'audio_url': file_path,
+                'content_length': len(document_content),
+                'is_reading_companion': True,
+                'generated_script': False
+            },
+            'processing_time': time.time(),
+            'completed_at': datetime.now().isoformat(),
+            'job_id': job_id,
+            'user_id': user_id
+        }
+        
+    except Exception as e:
+        print(f'Job {job_id}: ❌ Reading companion audio generation failed: {str(e)}')
+        return {
+            'status': 'failed',
+            'error': str(e),
+            'failed_at': datetime.now().isoformat(),
+            'job_id': job_id,
+            'user_id': user_id
         } 
