@@ -10,13 +10,17 @@ from datetime import datetime
 from dotenv import load_dotenv
 from celery_config import celery_app
 import tasks  # Import tasks to register them with Celery
-from tasks import process_document_job, generate_audio_job, generate_reading_audio_job
+from tasks import process_document_job, process_document_batch, generate_audio_job, generate_reading_audio_job
+from batch_monitor import BatchProcessingMonitor
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Initialize batch processing monitor
+batch_monitor = BatchProcessingMonitor()
 
 # Configure OpenAI client
 client = openai.OpenAI(
@@ -34,6 +38,10 @@ def root():
             'health': '/health',
             'test': '/test',
             'process_document': '/process-document',
+            'process_large_document': '/process-large-document',
+            'batch_status': '/batch-status/<job_id>',
+            'batch_stats': '/batch-stats',
+            'cancel_job': '/cancel-job/<job_id>',
             'generate_audio': '/generate-audio',
             'generate_reading_audio': '/generate-reading-audio',
             'job_status': '/job-status/<job_id>'
@@ -141,6 +149,116 @@ def process_document():
     except Exception as e:
         print(f"Error in process_document: {str(e)}")
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+
+@app.route('/process-large-document', methods=['POST'])
+def process_large_document():
+    """Optimized endpoint for processing large documents (500+ pages) with batch processing"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        job_id = data.get('job_id')
+        user_id = data.get('user_id')
+        images_base64 = data.get('images_base64', [])
+        num_pages = data.get('num_pages', len(images_base64))
+        file_type = data.get('file_type', 'PDF')
+
+        print(f"Received large document processing request: job_id={job_id}, user_id={user_id}, pages={num_pages}")
+
+        if not job_id or not user_id:
+            return jsonify({'error': 'Missing required fields: job_id, user_id'}), 400
+
+        if not images_base64:
+            return jsonify({'error': 'No images provided for processing'}), 400
+
+        # Validate document size
+        if len(images_base64) < 50:
+            return jsonify({
+                'error': 'Use /process-document endpoint for documents under 50 pages',
+                'redirect_endpoint': '/process-document'
+            }), 400
+
+        # Queue the large document job with batch processing
+        task = process_document_job.delay(job_id, images_base64, num_pages, file_type, user_id)
+        
+        # Calculate estimated processing time
+        estimated_time = (len(images_base64) * 30) / 6  # 30 seconds per page, 6 parallel workers
+        
+        return jsonify({
+            'status': 'queued',
+            'message': f'Large document processing job queued (batch processing enabled)',
+            'job_id': job_id,
+            'task_id': task.id,
+            'user_id': user_id,
+            'num_pages': num_pages,
+            'file_type': file_type,
+            'processing_strategy': 'batch_parallel',
+            'batch_size': 25,
+            'estimated_batches': (len(images_base64) + 24) // 25,  # Round up
+            'estimated_completion_minutes': int(estimated_time / 60),
+            'status_endpoint': f'/batch-status/{job_id}',
+            'task_endpoint': f'/task-status/{task.id}',
+            'cancel_endpoint': f'/cancel-job/{job_id}'
+        })
+
+    except Exception as e:
+        print(f"Error in process_large_document: {str(e)}")
+        return jsonify({'error': f'Large document processing failed: {str(e)}'}), 500
+
+@app.route('/batch-status/<job_id>', methods=['GET'])
+def get_batch_status(job_id):
+    """Get detailed batch processing status for large documents"""
+    try:
+        progress = batch_monitor.get_job_progress(job_id)
+        
+        # Add estimation if processing
+        if progress['status'] == 'processing' and progress['current_page'] > 0:
+            pages_remaining = progress['total_pages'] - progress['current_page']
+            if pages_remaining > 0:
+                estimation = batch_monitor.estimate_completion_time(job_id, pages_remaining)
+                progress.update(estimation)
+        
+        return jsonify(progress)
+        
+    except Exception as e:
+        return jsonify({
+            'job_id': job_id,
+            'error': f'Error retrieving batch status: {str(e)}',
+            'status': 'error'
+        }), 500
+
+@app.route('/batch-stats', methods=['GET'])
+def get_batch_stats():
+    """Get overall batch processing system statistics"""
+    try:
+        stats = batch_monitor.get_batch_statistics()
+        return jsonify(stats)
+        
+    except Exception as e:
+        return jsonify({'error': f'Error retrieving batch stats: {str(e)}'}), 500
+
+@app.route('/cancel-job/<job_id>', methods=['POST'])
+def cancel_job(job_id):
+    """Cancel a batch processing job and all its tasks"""
+    try:
+        result = batch_monitor.cancel_job(job_id)
+        
+        if result.get('error'):
+            return jsonify(result), 500
+        
+        return jsonify({
+            'status': 'cancelled',
+            'message': f'Job {job_id} and {result["cancelled_tasks"]} associated tasks have been cancelled',
+            **result
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'job_id': job_id,
+            'error': f'Error cancelling job: {str(e)}',
+            'status': 'error'
+        }), 500
 
 @app.route('/generate-audio', methods=['POST'])
 def generate_audio():

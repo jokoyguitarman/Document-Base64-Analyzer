@@ -14,6 +14,48 @@ client = openai.OpenAI(
     max_retries=3
 )
 
+def clean_text_for_tts(text):
+    """Clean text for better text-to-speech output by removing markdown formatting and other artifacts"""
+    import re
+    
+    if not text:
+        return ""
+    
+    # Remove citations first
+    # Remove URLs
+    clean = re.sub(r'https?://[^\s)]+', '', text)
+    # Remove parenthetical citations with URLs
+    clean = re.sub(r'\([^)]*https?://[^)]*\)', '', clean)
+    # Remove [number] citations
+    clean = re.sub(r'\[\d+\]', '', clean)
+    # Remove bibliography section and everything after
+    clean = re.sub(r'Bibliography:[\s\S]*', '', clean, flags=re.IGNORECASE)
+    
+    # Remove markdown formatting
+    # Remove headings (##, ###, etc.) - this addresses the #### issue
+    clean = re.sub(r'^#+\s?', '', clean, flags=re.MULTILINE)
+    # Remove bold/italic (**text**, *text*, __text__, _text_) - this addresses the **** issue
+    clean = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean)
+    clean = re.sub(r'\*([^*]+)\*', r'\1', clean)
+    clean = re.sub(r'__([^_]+)__', r'\1', clean)
+    clean = re.sub(r'_([^_]+)_', r'\1', clean)
+    # Remove unordered list markers
+    clean = re.sub(r'^\s*[-*+]\s+', '', clean, flags=re.MULTILINE)
+    # Remove ordered list markers
+    clean = re.sub(r'^\s*\d+\.\s+', '', clean, flags=re.MULTILINE)
+    # Remove blockquotes
+    clean = re.sub(r'^>\s?', '', clean, flags=re.MULTILINE)
+    # Remove inline code
+    clean = re.sub(r'`([^`]+)`', r'\1', clean)
+    # Remove code blocks
+    clean = re.sub(r'```[\s\S]*?```', '', clean)
+    # Remove extra spaces and normalize whitespace
+    clean = re.sub(r'\s{2,}', ' ', clean)
+    # Remove extra newlines
+    clean = re.sub(r'\n{3,}', '\n\n', clean)
+    
+    return clean.strip()
+
 def analyze_page_sync(base64_str, page_number, total_pages, file_type, job_id):
     """Analyze a single page synchronously (non-Celery version)"""
     try:
@@ -146,10 +188,87 @@ Analyze page {page_number} of this {total_pages}-page {file_type} document using
         }
 
 @celery_app.task(bind=True)
-def process_document_job(self, job_id, images_base64, num_pages, file_type, user_id):
-    """Process entire document by analyzing each page and creating summary"""
+def process_document_batch(self, job_id, batch_start, batch_end, images_base64_batch, num_pages, file_type, user_id):
+    """Process a batch of pages in parallel for large documents"""
     try:
-        print(f"Starting document processing job {job_id}")
+        print(f"Starting batch processing job {job_id} - pages {batch_start}-{batch_end}")
+        
+        # Update initial state
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 0,
+                'total': len(images_base64_batch),
+                'status': f'Processing batch {batch_start}-{batch_end}',
+                'job_id': job_id,
+                'batch_start': batch_start,
+                'batch_end': batch_end
+            }
+        )
+        
+        batch_results = []
+        start_time = time.time()
+        
+        # Process pages in this batch in parallel using Celery group
+        from celery import group
+        
+        # Create parallel tasks for this batch
+        page_tasks = group(
+            analyze_page.s(img_base64, batch_start + i, num_pages, file_type, job_id)
+            for i, img_base64 in enumerate(images_base64_batch)
+        )
+        
+        # Execute all page analyses in parallel
+        job = page_tasks.apply_async()
+        results = job.get(timeout=1500)  # 25 minute timeout for batch
+        
+        # Process results
+        for i, page_result in enumerate(results):
+            page_num = batch_start + i
+            if page_result and page_result.get('status') == 'completed':
+                batch_results.append({
+                    'page_number': page_num,
+                    'analysis': page_result['analysis'],
+                    'status': 'completed'
+                })
+            else:
+                error_msg = page_result.get('error', 'Unknown error') if page_result else 'No result returned'
+                batch_results.append({
+                    'page_number': page_num,
+                    'analysis': f"Error processing page: {error_msg}",
+                    'status': 'failed'
+                })
+        
+        processing_time = time.time() - start_time
+        
+        return {
+            'status': 'completed',
+            'batch_start': batch_start,
+            'batch_end': batch_end,
+            'results': batch_results,
+            'processing_time': processing_time,
+            'pages_processed': len(batch_results),
+            'job_id': job_id,
+            'user_id': user_id
+        }
+        
+    except Exception as e:
+        print(f"Batch job {job_id} (pages {batch_start}-{batch_end}): ❌ Processing failed: {str(e)}")
+        return {
+            'status': 'failed',
+            'batch_start': batch_start,
+            'batch_end': batch_end,
+            'error': str(e),
+            'failed_at': datetime.now().isoformat(),
+            'job_id': job_id,
+            'user_id': user_id
+        }
+
+@celery_app.task(bind=True)
+def process_document_job(self, job_id, images_base64, num_pages, file_type, user_id):
+    """Process entire document by analyzing pages in batches for large documents"""
+    try:
+        print(f"Starting document processing job {job_id} with {len(images_base64)} pages")
         
         # Update initial state
         self.update_state(
@@ -162,35 +281,103 @@ def process_document_job(self, job_id, images_base64, num_pages, file_type, user
             }
         )
         
-        all_page_analyses = []
         start_time = time.time()
         
-        # Process each page
-        for i, img_base64 in enumerate(images_base64):
-            page_num = i + 1
+        # Determine processing strategy based on document size
+        if len(images_base64) > 50:  # Use batch processing for documents over 50 pages
+            print(f"Job {job_id}: Large document detected ({len(images_base64)} pages), using batch processing")
             
-            # Update progress
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'current': page_num,
-                    'total': len(images_base64),
-                    'status': f'Analyzing page {page_num}/{len(images_base64)}',
-                    'job_id': job_id
-                }
-            )
+            # Process in batches of 25 pages for optimal performance
+            batch_size = 25
+            batch_tasks = []
+            all_page_analyses = []
             
-            # Analyze this page directly (synchronous) instead of using .delay()
-            try:
-                page_data = analyze_page_sync(img_base64, page_num, num_pages, file_type, job_id)
+            # Create batch tasks
+            for i in range(0, len(images_base64), batch_size):
+                batch_start = i + 1  # 1-indexed
+                batch_end = min(i + batch_size, len(images_base64))
+                batch_images = images_base64[i:i + batch_size]
                 
-                if page_data['status'] == 'completed':
-                    all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_data['analysis']}\n\n")
-                else:
-                    all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {page_data['error']}\n\n")
-            except Exception as e:
-                print(f"Job {job_id}: ❌ Error analyzing page {page_num}: {str(e)}")
-                all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {str(e)}\n\n")
+                print(f"Job {job_id}: Creating batch for pages {batch_start}-{batch_end}")
+                
+                # Queue batch processing task
+                batch_task = process_document_batch.delay(
+                    job_id, batch_start, batch_end, batch_images, num_pages, file_type, user_id
+                )
+                batch_tasks.append(batch_task)
+            
+            # Wait for all batches to complete and collect results
+            completed_pages = 0
+            for batch_idx, batch_task in enumerate(batch_tasks):
+                try:
+                    print(f"Job {job_id}: Waiting for batch {batch_idx + 1}/{len(batch_tasks)}")
+                    
+                    # Update progress
+                    self.update_state(
+                        state='PROGRESS',
+                        meta={
+                            'current': completed_pages,
+                            'total': len(images_base64),
+                            'status': f'Processing batch {batch_idx + 1}/{len(batch_tasks)}',
+                            'job_id': job_id
+                        }
+                    )
+                    
+                    batch_result = batch_task.get(timeout=1800)  # 30 minute timeout per batch
+                    
+                    if batch_result['status'] == 'completed':
+                        # Sort results by page number and add to overall results
+                        sorted_results = sorted(batch_result['results'], key=lambda x: x['page_number'])
+                        for page_result in sorted_results:
+                            page_num = page_result['page_number']
+                            all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_result['analysis']}\n\n")
+                            completed_pages += 1
+                    else:
+                        print(f"Job {job_id}: Batch {batch_idx + 1} failed: {batch_result.get('error', 'Unknown error')}")
+                        # Add error entries for failed batch
+                        batch_start = batch_result.get('batch_start', completed_pages + 1)
+                        batch_end = batch_result.get('batch_end', completed_pages + 25)
+                        for page_num in range(batch_start, batch_end + 1):
+                            all_page_analyses.append(f"**Page {page_num} Analysis:**\nBatch processing failed: {batch_result.get('error', 'Unknown error')}\n\n")
+                            completed_pages += 1
+                            
+                except Exception as e:
+                    print(f"Job {job_id}: Error waiting for batch {batch_idx + 1}: {str(e)}")
+                    # Add error entries for this batch
+                    for _ in range(min(25, len(images_base64) - completed_pages)):
+                        completed_pages += 1
+                        all_page_analyses.append(f"**Page {completed_pages} Analysis:**\nBatch processing error: {str(e)}\n\n")
+        
+        else:  # Use sequential processing for smaller documents (<=50 pages)
+            print(f"Job {job_id}: Small document ({len(images_base64)} pages), using sequential processing")
+            all_page_analyses = []
+            
+            # Process each page sequentially
+            for i, img_base64 in enumerate(images_base64):
+                page_num = i + 1
+                
+                # Update progress
+                self.update_state(
+                    state='PROGRESS',
+                    meta={
+                        'current': page_num,
+                        'total': len(images_base64),
+                        'status': f'Analyzing page {page_num}/{len(images_base64)}',
+                        'job_id': job_id
+                    }
+                )
+                
+                # Analyze this page directly (synchronous) for smaller documents
+                try:
+                    page_data = analyze_page_sync(img_base64, page_num, num_pages, file_type, job_id)
+                    
+                    if page_data['status'] == 'completed':
+                        all_page_analyses.append(f"**Page {page_num} Analysis:**\n{page_data['analysis']}\n\n")
+                    else:
+                        all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {page_data['error']}\n\n")
+                except Exception as e:
+                    print(f"Job {job_id}: ❌ Error analyzing page {page_num}: {str(e)}")
+                    all_page_analyses.append(f"**Page {page_num} Analysis:**\nError processing this page: {str(e)}\n\n")
         
         # Combine analyses
         combined_analysis = "\n".join(all_page_analyses)
@@ -565,8 +752,11 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Generate podcast-style script
-        final_text = generate_podcast_script(document_content)
+        # Clean the document content before generating script
+        cleaned_content = clean_text_for_tts(document_content)
+        
+        # Generate podcast-style script from cleaned content
+        final_text = generate_podcast_script(cleaned_content)
         print(f'Job {job_id}: Generated script length: {len(final_text)}')
         
         # Update progress
@@ -796,8 +986,11 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 chunks.append(current)
             return chunks
         
+        # Clean the text for better audio output (remove markdown formatting)
+        cleaned_content = clean_text_for_tts(document_content)
+        
         max_tts_bytes = 5000
-        text_chunks = split_text_by_bytes(document_content, max_tts_bytes)
+        text_chunks = split_text_by_bytes(cleaned_content, max_tts_bytes)
         audio_buffers = []
         
         for chunk in text_chunks:
