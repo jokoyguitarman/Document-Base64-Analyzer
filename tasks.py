@@ -64,6 +64,232 @@ def clean_text_for_tts(text):
     
     return clean.strip()
 
+def generate_2speaker_podcast_script_chunk(content, chunk_index, total_chunks, speaker_1_name="Alex", speaker_2_name="Sam"):
+    """Generate 2-speaker podcast script for a single chunk"""
+    if not client:
+        raise Exception('OpenAI is not available')
+    
+    context_info = f' (Part {chunk_index + 1} of {total_chunks})' if total_chunks > 1 else ''
+    
+    prompt = f"""Create a natural, engaging 2-person podcast conversation script about this educational content.
+
+**REQUIREMENTS:**
+- Two speakers: {speaker_1_name} (more knowledgeable, explains concepts) and {speaker_2_name} (curious learner, asks questions)
+- Natural conversation flow with interruptions, laughter, and organic dialogue
+- Vary speaking patterns: sometimes {speaker_1_name} explains, sometimes {speaker_2_name} has insights
+- Include natural speech patterns like "You know what I mean?", "That's fascinating!", "Wait, let me get this straight..."
+- Make it sound like two friends having an engaging discussion, not a formal presentation
+- Avoid any meta-language about "this document" or "this content" - speak naturally
+- Keep each speaker's lines reasonably short for TTS processing
+
+**FORMAT:**
+{speaker_1_name}: [dialogue]
+{speaker_2_name}: [dialogue]
+{speaker_1_name}: [dialogue]
+... and so on
+
+**CONTENT TO DISCUSS:**
+{content}
+
+{context_info}
+
+Make this sound like a real podcast conversation that would keep listeners engaged."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert script writer who creates natural, engaging 2-person podcast conversations. Focus on making dialogue sound authentic and conversational."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            max_tokens=2000,
+            temperature=0.8,
+        )
+
+        generated_script = response.choices[0].message.content
+        if not generated_script:
+            raise Exception(f'No podcast script generated from ChatGPT for chunk {chunk_index + 1}')
+
+        print(f'2-speaker podcast script chunk {chunk_index + 1}/{total_chunks} generated successfully')
+        return generated_script
+    except Exception as error:
+        print(f'Error generating 2-speaker podcast script for chunk {chunk_index + 1}: {error}')
+        raise error
+
+def generate_2speaker_podcast_script(content):
+    """Generate 2-speaker podcast-style script using ChatGPT with chunking"""
+    if not client:
+        raise Exception('OpenAI is not available')
+
+    # Check if content is small enough to process in one go
+    word_count = count_words(content)
+    
+    if word_count <= 4000:
+        # Small content - process directly
+        return generate_2speaker_podcast_script_chunk(content, 0, 1)
+
+    # Large content - use chunking
+    print(f'Content is {word_count} words, using chunking system for 2-speaker podcast...')
+    
+    chunks = chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+
+    print(f'Split content into {len(chunks)} chunks for 2-speaker podcast')
+
+    # Process chunks sequentially
+    script_chunks = []
+    
+    for i, chunk in enumerate(chunks):
+        print(f'Processing 2-speaker podcast chunk {i + 1}/{len(chunks)} ({chunk["word_count"]} words)...')
+        
+        try:
+            script_chunk = generate_2speaker_podcast_script_chunk(chunk['content'], i, len(chunks))
+            script_chunks.append(script_chunk)
+            
+            # Add a small delay between chunks to avoid rate limiting
+            if i < len(chunks) - 1:
+                time.sleep(1)
+        except Exception as error:
+            print(f'Failed to process 2-speaker podcast chunk {i + 1}: {error}')
+            raise Exception(f'Failed to process 2-speaker podcast chunk {i + 1}: {str(error)}')
+
+    # Combine script chunks with proper spacing
+    combined_script = '\n\n'.join(script_chunks)
+    print(f'Successfully generated 2-speaker podcast script from {len(chunks)} chunks')
+    
+    return combined_script
+
+def parse_speaker_segments(script):
+    """Parse podcast script to identify speaker changes and text"""
+    import re
+    
+    # Pattern to match speaker lines: "Speaker: text"
+    pattern = r'^(\w+):\s*(.+?)(?=\n\w+:|$)'
+    
+    segments = []
+    lines = script.split('\n')
+    current_speaker = None
+    current_text = ""
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check if this line starts with a speaker name
+        match = re.match(r'^(\w+):\s*(.+)', line)
+        if match:
+            # Save previous segment if exists
+            if current_speaker and current_text:
+                segments.append({
+                    'speaker': current_speaker,
+                    'text': current_text.strip()
+                })
+            
+            # Start new segment
+            current_speaker = match.group(1)
+            current_text = match.group(2)
+        else:
+            # Continue current speaker's text
+            if current_speaker:
+                current_text += " " + line
+    
+    # Add the last segment
+    if current_speaker and current_text:
+        segments.append({
+            'speaker': current_speaker,
+            'text': current_text.strip()
+        })
+    
+    return segments
+
+def generate_2speaker_tts_audio(script, voice_male, voice_female, job_id):
+    """Generate TTS audio with alternating speakers for podcast style"""
+    
+    # Parse the script to identify speaker changes
+    speaker_segments = parse_speaker_segments(script)
+    
+    audio_buffers = []
+    current_speaker = None
+    
+    for segment in speaker_segments:
+        speaker = segment['speaker']
+        text = segment['text']
+        
+        # Determine which voice to use
+        if speaker.lower() in ['alex', 'speaker1', 'male']:
+            voice = voice_male
+            gender = texttospeech.SsmlVoiceGender.MALE
+        else:
+            voice = voice_female
+            gender = texttospeech.SsmlVoiceGender.FEMALE
+        
+        # Generate audio for this speaker segment
+        audio_buffer = generate_speaker_audio(text, voice, gender)
+        audio_buffers.append(audio_buffer)
+        
+        # Add a small pause between speakers for natural flow
+        if len(audio_buffers) > 1:
+            pause_buffer = generate_pause_audio(0.3)  # 300ms pause
+            audio_buffers.append(pause_buffer)
+    
+    # Consolidate all audio segments
+    consolidated_audio = b''.join(audio_buffers)
+    return consolidated_audio
+
+def generate_speaker_audio(text, voice, gender):
+    """Generate TTS audio for a specific speaker"""
+    client_tts = texttospeech.TextToSpeechClient()
+    
+    # Clean text for TTS
+    cleaned_text = clean_text_for_tts(text)
+    
+    # Split into TTS-friendly chunks if needed
+    text_chunks = split_text_by_bytes(cleaned_text, 5000)
+    audio_buffers = []
+    
+    for chunk in text_chunks:
+        response_tts = client_tts.synthesize_speech({
+            'input': {'text': chunk},
+            'voice': {
+                'language_code': 'en-US',
+                'name': voice,
+                'ssml_gender': gender
+            },
+            'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+        })
+        
+        if response_tts.audio_content:
+            audio_buffers.append(response_tts.audio_content)
+    
+    return b''.join(audio_buffers)
+
+def generate_pause_audio(duration_seconds):
+    """Generate a brief pause between speakers"""
+    # For now, return empty buffer - this can be enhanced later with actual pause generation
+    return b''
+
+def split_text_by_bytes(text, max_bytes):
+    """Helper to split text into <=5000 byte chunks"""
+    encoder = text.encode('utf-8')
+    chunks = []
+    current = ''
+    for char in text:
+        test = current + char
+        if test.encode('utf-8').__sizeof__() > max_bytes:
+            chunks.append(current)
+            current = char
+        else:
+            current = test
+    if current:
+        chunks.append(current)
+    return chunks
+
 def analyze_page_sync(base64_str, page_number, total_pages, file_type, job_id):
     """Analyze a single page synchronously (non-Celery version)"""
     try:
@@ -576,10 +802,10 @@ def generate_podcast_script(content):
     return combined_script
 
 @celery_app.task(bind=True)
-def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q'):
-    """Generate audio from document content using background processing"""
+def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', audio_style='single_speaker'):
+    """Generate audio from document content using background processing with multiple style options"""
     try:
-        print(f'Job {job_id}: Starting audio generation for document {document_id}')
+        print(f'Job {job_id}: Starting audio generation for document {document_id} with style: {audio_style}')
         
         # Update task state
         self.update_state(
@@ -620,7 +846,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             meta={
                 'current': 1,
                 'total': 4,
-                'status': 'Generating podcast script',
+                'status': f'Generating {"2-speaker podcast" if audio_style == "2speaker_podcast" else "podcast"} script',
                 'job_id': job_id
             }
         )
@@ -628,9 +854,15 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         # Clean the document content before generating script
         cleaned_content = clean_text_for_tts(document_content)
         
-        # Generate podcast-style script from cleaned content
-        final_text = generate_podcast_script(cleaned_content)
-        print(f'Job {job_id}: Generated script length: {len(final_text)}')
+        # Generate script based on audio style
+        if audio_style == '2speaker_podcast':
+            # Generate 2-speaker podcast script
+            final_text = generate_2speaker_podcast_script(cleaned_content)
+            print(f'Job {job_id}: Generated 2-speaker podcast script length: {len(final_text)}')
+        else:
+            # Generate single-speaker podcast script (existing behavior)
+            final_text = generate_podcast_script(cleaned_content)
+            print(f'Job {job_id}: Generated single-speaker script length: {len(final_text)}')
         
         # Update progress
         self.update_state(
@@ -643,53 +875,14 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Initialize Google TTS
-        # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
-        if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
-            key_path = '/tmp/google-tts-key.json'
-            with open(key_path, 'w') as f:
-                f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
-        
-        client_tts = texttospeech.TextToSpeechClient()
-        
-        # Helper to split text into <=5000 byte chunks
-        def split_text_by_bytes(text, max_bytes):
-            encoder = text.encode('utf-8')
-            chunks = []
-            current = ''
-            for char in text:
-                test = current + char
-                if test.encode('utf-8').__sizeof__() > max_bytes:
-                    chunks.append(current)
-                    current = char
-                else:
-                    current = test
-            if current:
-                chunks.append(current)
-            return chunks
-        
-        max_tts_bytes = 5000
-        text_chunks = split_text_by_bytes(final_text, max_tts_bytes)
-        audio_buffers = []
-        
-        for chunk in text_chunks:
-            response_tts = client_tts.synthesize_speech({
-                'input': {'text': chunk},
-                'voice': {
-                    'language_code': 'en-US',
-                    'name': voice,
-                    'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-                },
-                'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-            })
-            
-            if not response_tts.audio_content:
-                raise Exception('No audio content returned from Google TTS')
-            
-            audio_buffers.append(response_tts.audio_content)
-        
-        audio_buffer = b''.join(audio_buffers)
+        # Generate audio based on style
+        if audio_style == '2speaker_podcast':
+            # For 2-speaker podcast, determine female voice based on male voice
+            voice_female = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'
+            audio_buffer = generate_2speaker_tts_audio(final_text, voice, voice_female, job_id)
+        else:
+            # Single speaker TTS (existing behavior)
+            audio_buffer = self.generate_single_speaker_tts(final_text, voice, job_id)
         
         # Update progress
         self.update_state(
@@ -703,7 +896,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         )
         
         # Upload to Supabase Storage
-        file_path = f'audio/{document_id}-{int(time.time())}.mp3'
+        file_path = f'audio/{document_id}-{audio_style}-{int(time.time())}.mp3'
         
         upload_response = supabase.storage.from_('documents').upload(
             file_path,
@@ -743,6 +936,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
                 'result': {
                     'audio_url': file_path,
                     'script_length': len(final_text),
+                    'audio_style': audio_style,
                     'is_summary': True,
                     'generated_script': True
                 },
@@ -763,6 +957,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'result': {
                 'audio_url': file_path,
                 'script_length': len(final_text),
+                'audio_style': audio_style,
                 'is_summary': True,
                 'generated_script': True
             },
@@ -781,6 +976,41 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'job_id': job_id,
             'user_id': user_id
         }
+
+def generate_single_speaker_tts(self, final_text, voice, job_id):
+    """Generate TTS audio for single speaker (existing logic)"""
+    # Initialize Google TTS
+    # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
+    if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+        key_path = '/tmp/google-tts-key.json'
+        with open(key_path, 'w') as f:
+            f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
+    
+    client_tts = texttospeech.TextToSpeechClient()
+    
+    # Split text into <=5000 byte chunks
+    text_chunks = split_text_by_bytes(final_text, 5000)
+    audio_buffers = []
+    
+    for chunk in text_chunks:
+        response_tts = client_tts.synthesize_speech({
+            'input': {'text': chunk},
+            'voice': {
+                'language_code': 'en-US',
+                'name': voice,
+                'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+            },
+            'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+        })
+        
+        if not response_tts.audio_content:
+            raise Exception('No audio content returned from Google TTS')
+        
+        audio_buffers.append(response_tts.audio_content)
+    
+    audio_buffer = b''.join(audio_buffers)
+    return audio_buffer
 
 @celery_app.task(bind=True)
 def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q'):
