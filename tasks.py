@@ -1096,6 +1096,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         )
         
         # Use page-based chunking if pages_data is provided, otherwise fall back to content-based
+        print(f'Job {job_id}: Debug - pages_data type: {type(pages_data)}, value: {pages_data}')
         if pages_data and len(pages_data) > 0:
             # Use actual page structure from frontend
             print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
@@ -1106,6 +1107,9 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             print(f'Job {job_id}: No page data provided, using content-based chunking...')
             cleaned_content = clean_text_for_tts(document_content)
             chunks = chunk_content(cleaned_content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+            print(f'Job {job_id}: Debug - chunks type: {type(chunks)}, length: {len(chunks) if chunks else 0}')
+            if chunks:
+                print(f'Job {job_id}: Debug - first chunk structure: {chunks[0] if chunks else "No chunks"}')
             chunk_type = "content_chunks"
         
         print(f'Job {job_id}: Processing {len(chunks)} {chunk_type}')
@@ -1133,15 +1137,21 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         
         # Process each chunk/page through TTS
         for i, chunk in enumerate(chunks):
+            print(f'Job {job_id}: Debug - Processing chunk {i}, type: {type(chunk)}, value: {chunk}')
+            
             if chunk_type == "pages":
                 # Extract content from page structure
                 chunk_content = chunk.get('content', '') or chunk.get('text', '')
                 chunk_info = f"page {chunk.get('pageNumber', i + 1)}"
             else:
-                # Use content chunk structure
-                chunk_content = chunk.get('content', '')
+                # Use content chunk structure - handle both dict and string formats
+                if isinstance(chunk, dict):
+                    chunk_content = chunk.get('content', '') or chunk.get('text', '')
+                else:
+                    chunk_content = str(chunk)
                 chunk_info = f"chunk {i + 1}"
             
+            print(f'Job {job_id}: Debug - chunk_content: {chunk_content[:100]}...')
             print(f'Job {job_id}: Processing {chunk_info} ({len(chunk_content)} characters)...')
             
             # Update progress for each chunk
