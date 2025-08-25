@@ -71,15 +71,35 @@ def clean_text_for_tts(text):
         
         # If sentence is too long, split it further
         if len(sentence) > 200:
-            # Split on commas, semicolons, or colons
-            parts = re.split(r'([,;:])', sentence)
-            for j in range(0, len(parts), 2):
-                if j + 1 < len(parts):
-                    part = parts[j] + parts[j + 1]
-                else:
-                    part = parts[j]
-                if part.strip():
-                    processed_sentences.append(part.strip())
+            # Try to split on natural break points first
+            if ',' in sentence:
+                parts = sentence.split(', ')
+                for part in parts:
+                    if part.strip():
+                        processed_sentences.append(part.strip() + '.')
+            elif ';' in sentence:
+                parts = sentence.split('; ')
+                for part in parts:
+                    if part.strip():
+                        processed_sentences.append(part.strip() + '.')
+            elif ':' in sentence:
+                parts = sentence.split(': ')
+                for part in parts:
+                    if part.strip():
+                        processed_sentences.append(part.strip() + '.')
+            else:
+                # Force split at word boundaries around 150 characters
+                words = sentence.split()
+                current_part = ""
+                for word in words:
+                    if len(current_part + " " + word) > 150:
+                        if current_part:
+                            processed_sentences.append(current_part.strip() + '.')
+                        current_part = word
+                    else:
+                        current_part += " " + word if current_part else word
+                if current_part:
+                    processed_sentences.append(current_part.strip() + '.')
         else:
             if sentence.strip():
                 processed_sentences.append(sentence.strip())
@@ -319,6 +339,99 @@ def split_text_by_bytes(text, max_bytes):
     if current:
         chunks.append(current)
     return chunks
+
+def split_text_for_tts_safety(text, max_chars=150):
+    """Additional safety function to split text for TTS compatibility"""
+    if not text or len(text) <= max_chars:
+        return [text]
+    
+    # Split on sentence boundaries first
+    import re
+    sentences = re.split(r'([.!?]+)\s+', text)
+    chunks = []
+    
+    for i in range(0, len(sentences), 2):
+        if i + 1 < len(sentences):
+            sentence = sentences[i] + sentences[i + 1]
+        else:
+            sentence = sentences[i]
+        
+        if len(sentence) <= max_chars:
+            chunks.append(sentence)
+        else:
+            # Split long sentences further
+            words = sentence.split()
+            current_chunk = ""
+            
+            for word in words:
+                if len(current_chunk + " " + word) > max_chars:
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                    current_chunk = word
+                else:
+                    current_chunk += " " + word if current_chunk else word
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+    
+    return chunks
+
+def parse_content_into_pages(content):
+    """Parse document content into pages based on 'Page X' patterns"""
+    if not content:
+        return []
+    
+    import re
+    
+    # Look for patterns like "Page X", "Page X:", "Page X -", etc.
+    page_pattern = r'Page\s+(\d+)\s*(?:Analysis|:|-\s*|\.\s*|$)' 
+    matches = list(re.finditer(page_pattern, content, re.IGNORECASE))
+    
+    if len(matches) == 0:
+        # No page markers found, treat as single page
+        return [{
+            'pageNumber': 1,
+            'content': content,
+            'title': 'Document Content'
+        }]
+    
+    pages = []
+    
+    # Extract page content with boundary handling
+    for i in range(len(matches)):
+        match = matches[i]
+        page_number = int(match.group(1))
+        
+        if i == 0:
+            # First page: start from beginning of content
+            start_index = 0
+            end_index = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+            
+            page_content = content[start_index:end_index].strip()
+            lines = page_content.split('\n')
+            title = lines[0].strip() if lines else f'Page {page_number}'
+            
+            pages.append({
+                'pageNumber': page_number,
+                'content': page_content,
+                'title': title
+            })
+        else:
+            # Subsequent pages: start from the page marker
+            start_index = match.start()
+            end_index = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+            
+            page_content = content[start_index:end_index].strip()
+            lines = page_content.split('\n')
+            title = lines[0].strip() if lines else f'Page {page_number}'
+            
+            pages.append({
+                'pageNumber': page_number,
+                'content': page_content,
+                'title': title
+            })
+    
+    return pages
 
 def analyze_page_sync(base64_str, page_number, total_pages, file_type, job_id):
     """Analyze a single page synchronously (non-Celery version)"""
@@ -881,11 +994,14 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Page-based chunking is now mandatory
+        # Extract page information from document content if not provided
         if not pages_data or len(pages_data) == 0:
-            raise Exception('Page data is required for audio generation. Please provide pages_data parameter.')
+            print(f'Job {job_id}: No page data provided, extracting pages from document content...')
+            # Parse content into pages based on "Page X" patterns
+            pages_data = parse_content_into_pages(document_content)
+            print(f'Job {job_id}: Extracted {len(pages_data)} pages from document content')
         
-        # Use actual page structure from frontend
+        # Use page-based processing
         print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
         chunks = pages_data
         chunk_type = "pages"
@@ -1009,11 +1125,18 @@ def generate_single_speaker_tts(final_text, voice, job_id):
     
     client_tts = texttospeech.TextToSpeechClient()
     
-    # Split text into <=5000 byte chunks
-    text_chunks = split_text_by_bytes(final_text, 5000)
+    # Additional safety: split into TTS-friendly character chunks first
+    text_chunks = split_text_for_tts_safety(final_text, 150)
+    
+    # Further split into TTS-friendly byte chunks
+    final_text_chunks = []
+    for text_chunk in text_chunks:
+        byte_chunks = split_text_by_bytes(text_chunk, 5000)
+        final_text_chunks.extend(byte_chunks)
+    
     audio_buffers = []
     
-    for chunk in text_chunks:
+    for chunk in final_text_chunks:
         response_tts = client_tts.synthesize_speech({
             'input': {'text': chunk},
             'voice': {
@@ -1083,11 +1206,14 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             }
         )
         
-        # Page-based chunking is now mandatory
+        # Extract page information from document content if not provided
         if not pages_data or len(pages_data) == 0:
-            raise Exception('Page data is required for audio generation. Please provide pages_data parameter.')
+            print(f'Job {job_id}: No page data provided, extracting pages from document content...')
+            # Parse content into pages based on "Page X" patterns
+            pages_data = parse_content_into_pages(document_content)
+            print(f'Job {job_id}: Extracted {len(pages_data)} pages from document content')
         
-        # Use actual page structure from frontend
+        # Use page-based processing
         print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
         chunks = pages_data
         chunk_type = "pages"
@@ -1145,10 +1271,16 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             # Clean and process this chunk
             chunk_text = clean_text_for_tts(chunk_content)
             
-            # Split into TTS-friendly byte chunks
-            text_chunks = split_text_by_bytes(chunk_text, 5000)
+            # Additional safety: split into TTS-friendly character chunks
+            text_chunks = split_text_for_tts_safety(chunk_text, 150)
             
+            # Further split into TTS-friendly byte chunks
+            final_text_chunks = []
             for text_chunk in text_chunks:
+                byte_chunks = split_text_by_bytes(text_chunk, 5000)
+                final_text_chunks.extend(byte_chunks)
+            
+            for text_chunk in final_text_chunks:
                 response_tts = client_tts.synthesize_speech({
                     'input': {'text': text_chunk},
                     'voice': {
