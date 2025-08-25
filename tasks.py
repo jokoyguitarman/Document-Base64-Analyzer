@@ -881,44 +881,32 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Use page-based chunking if pages_data is provided, otherwise use content-based
-        if pages_data and len(pages_data) > 0:
-            # Use actual page structure from frontend
-            print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
-            chunks = pages_data
-            chunk_type = "pages"
-            
-            # Generate script for each page
-            script_chunks = []
-            for i, chunk in enumerate(chunks):
-                chunk_content = chunk.get('content', '') or chunk.get('text', '')
-                cleaned_chunk = clean_text_for_tts(chunk_content)
-                
-                if audio_style == '2speaker_podcast':
-                    script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks))
-                else:
-                    script_chunk = generate_podcast_script_chunk(cleaned_chunk, i, len(chunks))
-                
-                script_chunks.append(script_chunk)
-                print(f'Job {job_id}: ✅ Script generated for page {chunk.get("pageNumber", i + 1)}')
-            
-            # Combine all script chunks
-            final_text = '\n\n'.join(script_chunks)
-            print(f'Job {job_id}: Generated script from {len(chunks)} pages, total length: {len(final_text)}')
-            
-        else:
-            # Fall back to content-based chunking
-            print(f'Job {job_id}: No page data provided, using content-based chunking...')
-            cleaned_content = clean_text_for_tts(document_content)
+        # Page-based chunking is now mandatory
+        if not pages_data or len(pages_data) == 0:
+            raise Exception('Page data is required for audio generation. Please provide pages_data parameter.')
+        
+        # Use actual page structure from frontend
+        print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
+        chunks = pages_data
+        chunk_type = "pages"
+        
+        # Generate script for each page
+        script_chunks = []
+        for i, chunk in enumerate(chunks):
+            chunk_content = chunk.get('content', '') or chunk.get('text', '')
+            cleaned_chunk = clean_text_for_tts(chunk_content)
             
             if audio_style == '2speaker_podcast':
-                # Generate 2-speaker podcast script
-                final_text = generate_2speaker_podcast_script(cleaned_content)
-                print(f'Job {job_id}: Generated 2-speaker podcast script length: {len(final_text)}')
+                script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks))
             else:
-                # Generate single-speaker podcast script (existing behavior)
-                final_text = generate_podcast_script(cleaned_content)
-                print(f'Job {job_id}: Generated single-speaker script length: {len(final_text)}')
+                script_chunk = generate_podcast_script_chunk(cleaned_chunk, i, len(chunks))
+            
+            script_chunks.append(script_chunk)
+            print(f'Job {job_id}: ✅ Script generated for page {chunk.get("pageNumber", i + 1)}')
+        
+        # Combine all script chunks
+        final_text = '\n\n'.join(script_chunks)
+        print(f'Job {job_id}: Generated script from {len(chunks)} pages, total length: {len(final_text)}')
         
         # Update progress
         self.update_state(
@@ -1095,22 +1083,14 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             }
         )
         
-        # Use page-based chunking if pages_data is provided, otherwise fall back to content-based
-        print(f'Job {job_id}: Debug - pages_data type: {type(pages_data)}, value: {pages_data}')
-        if pages_data and len(pages_data) > 0:
-            # Use actual page structure from frontend
-            print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
-            chunks = pages_data
-            chunk_type = "pages"
-        else:
-            # Fall back to content-based chunking
-            print(f'Job {job_id}: No page data provided, using content-based chunking...')
-            cleaned_content = clean_text_for_tts(document_content)
-            chunks = chunk_content(cleaned_content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
-            print(f'Job {job_id}: Debug - chunks type: {type(chunks)}, length: {len(chunks) if chunks else 0}')
-            if chunks:
-                print(f'Job {job_id}: Debug - first chunk structure: {chunks[0] if chunks else "No chunks"}')
-            chunk_type = "content_chunks"
+        # Page-based chunking is now mandatory
+        if not pages_data or len(pages_data) == 0:
+            raise Exception('Page data is required for audio generation. Please provide pages_data parameter.')
+        
+        # Use actual page structure from frontend
+        print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
+        chunks = pages_data
+        chunk_type = "pages"
         
         print(f'Job {job_id}: Processing {len(chunks)} {chunk_type}')
         
@@ -1137,8 +1117,6 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         
         # Process each chunk/page through TTS
         for i, chunk in enumerate(chunks):
-            print(f'Job {job_id}: Debug - Processing chunk {i}, type: {type(chunk)}, value: {chunk}')
-            
             if chunk_type == "pages":
                 # Extract content from page structure
                 chunk_content = chunk.get('content', '') or chunk.get('text', '')
@@ -1151,7 +1129,6 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                     chunk_content = str(chunk)
                 chunk_info = f"chunk {i + 1}"
             
-            print(f'Job {job_id}: Debug - chunk_content: {chunk_content[:100]}...')
             print(f'Job {job_id}: Processing {chunk_info} ({len(chunk_content)} characters)...')
             
             # Update progress for each chunk

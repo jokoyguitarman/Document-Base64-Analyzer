@@ -48,8 +48,12 @@ def root():
             'generate_reading_audio': '/generate-reading-audio',
             'job_status': '/job-status/<job_id>'
         },
-        'version': '3.0.0',
-        'processing': 'celery-background'
+        'version': '3.1.0',
+        'processing': 'celery-background',
+        'audio_styles': {
+            'single_speaker': 'GPT-generated script + single voice TTS',
+            '2speaker_podcast': 'GPT-generated 2-person conversation + alternating voices TTS'
+        }
     })
 
 @app.route('/health', methods=['GET'])
@@ -344,7 +348,7 @@ def process_document_selection():
 
 @app.route('/generate-audio', methods=['POST'])
 def generate_audio():
-    """Queue audio generation job for background processing"""
+    """Queue audio generation job for background processing with multiple style options"""
     try:
         data = request.get_json()
         if not data:
@@ -354,23 +358,26 @@ def generate_audio():
         document_id = data.get('document_id')
         user_id = data.get('user_id')
         voice = data.get('voice', 'en-US-Studio-Q')
+        audio_style = data.get('audio_style', 'single_speaker')  # NEW parameter
+        pages_data = data.get('pages_data', [])  # NEW parameter
 
-        print(f"Received audio generation request: job_id={job_id}, document_id={document_id}, user_id={user_id}")
+        print(f"Received audio generation request: job_id={job_id}, document_id={document_id}, user_id={user_id}, style={audio_style}, pages={len(pages_data) if pages_data else 0}")
 
         if not job_id or not document_id or not user_id:
             return jsonify({'error': 'Missing required fields: job_id, document_id, user_id'}), 400
 
-        # Queue the audio generation job for background processing using Celery
-        task = generate_audio_job.delay(job_id, document_id, user_id, voice)
+        # Queue the audio generation job with style parameter and pages data
+        task = generate_audio_job.delay(job_id, document_id, user_id, voice, audio_style, pages_data)
         
         return jsonify({
             'status': 'queued',
-            'message': 'Audio generation job queued successfully',
+            'message': f'{audio_style.replace("_", " ").title()} audio generation job queued successfully',
             'job_id': job_id,
             'task_id': task.id,
             'user_id': user_id,
             'document_id': document_id,
             'voice': voice,
+            'audio_style': audio_style,  # NEW field
             'status_endpoint': f'/job-status/{job_id}',
             'task_endpoint': f'/task-status/{task.id}'
         })
@@ -391,14 +398,15 @@ def generate_reading_audio():
         document_id = data.get('document_id')
         user_id = data.get('user_id')
         voice = data.get('voice', 'en-US-Studio-Q')
+        pages_data = data.get('pages_data', [])  # NEW parameter
 
-        print(f"Received reading companion audio generation request: job_id={job_id}, document_id={document_id}, user_id={user_id}")
+        print(f"Received reading companion audio generation request: job_id={job_id}, document_id={document_id}, user_id={user_id}, pages={len(pages_data) if pages_data else 0}")
 
         if not job_id or not document_id or not user_id:
             return jsonify({'error': 'Missing required fields: job_id, document_id, user_id'}), 400
 
         # Queue the reading companion audio generation job for background processing using Celery
-        task = generate_reading_audio_job.delay(job_id, document_id, user_id, voice)
+        task = generate_reading_audio_job.delay(job_id, document_id, user_id, voice, pages_data)
         
         return jsonify({
             'status': 'queued',
