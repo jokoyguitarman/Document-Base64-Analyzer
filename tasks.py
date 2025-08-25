@@ -57,6 +57,36 @@ def clean_text_for_tts(text):
     clean = re.sub(r'`([^`]+)`', r'\1', clean)
     # Remove code blocks
     clean = re.sub(r'```[\s\S]*?```', '', clean)
+    
+    # NEW: Split very long sentences for TTS compatibility
+    # Split sentences that are longer than 200 characters
+    sentences = re.split(r'([.!?]+)\s+', clean)
+    processed_sentences = []
+    
+    for i in range(0, len(sentences), 2):
+        if i + 1 < len(sentences):
+            sentence = sentences[i] + sentences[i + 1]
+        else:
+            sentence = sentences[i]
+        
+        # If sentence is too long, split it further
+        if len(sentence) > 200:
+            # Split on commas, semicolons, or colons
+            parts = re.split(r'([,;:])', sentence)
+            for j in range(0, len(parts), 2):
+                if j + 1 < len(parts):
+                    part = parts[j] + parts[j + 1]
+                else:
+                    part = parts[j]
+                if part.strip():
+                    processed_sentences.append(part.strip())
+        else:
+            if sentence.strip():
+                processed_sentences.append(sentence.strip())
+    
+    # Join sentences back together
+    clean = ' '.join(processed_sentences)
+    
     # Remove extra spaces and normalize whitespace
     clean = re.sub(r'\s{2,}', ' ', clean)
     # Remove extra newlines
@@ -882,7 +912,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             audio_buffer = generate_2speaker_tts_audio(final_text, voice, voice_female, job_id)
         else:
             # Single speaker TTS (existing behavior)
-            audio_buffer = self.generate_single_speaker_tts(final_text, voice, job_id)
+            audio_buffer = generate_single_speaker_tts(final_text, voice, job_id)
         
         # Update progress
         self.update_state(
@@ -977,7 +1007,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'user_id': user_id
         }
 
-def generate_single_speaker_tts(self, final_text, voice, job_id):
+def generate_single_speaker_tts(final_text, voice, job_id):
     """Generate TTS audio for single speaker (existing logic)"""
     # Initialize Google TTS
     # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
