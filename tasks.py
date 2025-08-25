@@ -1071,12 +1071,28 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             try:
                 print(f'Job {job_id}: Calling Google TTS API for page {page_number}...')
                 
+                # For 2-speaker podcast, use alternating voices
+                if audio_style == '2speaker_podcast':
+                    # Determine which voice to use for this page (alternate between male/female)
+                    if i % 2 == 0:
+                        current_voice = voice  # Male voice
+                        current_gender = texttospeech.SsmlVoiceGender.MALE
+                        print(f'Job {job_id}: Using male voice for page {page_number}')
+                    else:
+                        current_voice = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'  # Female voice
+                        current_gender = texttospeech.SsmlVoiceGender.FEMALE
+                        print(f'Job {job_id}: Using female voice for page {page_number}')
+                else:
+                    # Single speaker
+                    current_voice = voice
+                    current_gender = texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                
                 response_tts = client_tts.synthesize_speech({
                     'input': {'text': cleaned_script},
                     'voice': {
                         'language_code': 'en-US',
-                        'name': voice,
-                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                        'name': current_voice,
+                        'ssml_gender': current_gender
                     },
                     'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
                 })
