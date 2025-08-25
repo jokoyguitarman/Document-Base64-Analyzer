@@ -832,8 +832,8 @@ def generate_podcast_script(content):
     return combined_script
 
 @celery_app.task(bind=True)
-def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', audio_style='single_speaker'):
-    """Generate audio from document content using background processing with multiple style options"""
+def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', audio_style='single_speaker', pages_data=None):
+    """Generate audio from document content using background processing with multiple style options and page-based chunking"""
     try:
         print(f'Job {job_id}: Starting audio generation for document {document_id} with style: {audio_style}')
         
@@ -881,18 +881,44 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Clean the document content before generating script
-        cleaned_content = clean_text_for_tts(document_content)
-        
-        # Generate script based on audio style
-        if audio_style == '2speaker_podcast':
-            # Generate 2-speaker podcast script
-            final_text = generate_2speaker_podcast_script(cleaned_content)
-            print(f'Job {job_id}: Generated 2-speaker podcast script length: {len(final_text)}')
+        # Use page-based chunking if pages_data is provided, otherwise use content-based
+        if pages_data and len(pages_data) > 0:
+            # Use actual page structure from frontend
+            print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
+            chunks = pages_data
+            chunk_type = "pages"
+            
+            # Generate script for each page
+            script_chunks = []
+            for i, chunk in enumerate(chunks):
+                chunk_content = chunk.get('content', '') or chunk.get('text', '')
+                cleaned_chunk = clean_text_for_tts(chunk_content)
+                
+                if audio_style == '2speaker_podcast':
+                    script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks))
+                else:
+                    script_chunk = generate_podcast_script_chunk(cleaned_chunk, i, len(chunks))
+                
+                script_chunks.append(script_chunk)
+                print(f'Job {job_id}: ✅ Script generated for page {chunk.get("pageNumber", i + 1)}')
+            
+            # Combine all script chunks
+            final_text = '\n\n'.join(script_chunks)
+            print(f'Job {job_id}: Generated script from {len(chunks)} pages, total length: {len(final_text)}')
+            
         else:
-            # Generate single-speaker podcast script (existing behavior)
-            final_text = generate_podcast_script(cleaned_content)
-            print(f'Job {job_id}: Generated single-speaker script length: {len(final_text)}')
+            # Fall back to content-based chunking
+            print(f'Job {job_id}: No page data provided, using content-based chunking...')
+            cleaned_content = clean_text_for_tts(document_content)
+            
+            if audio_style == '2speaker_podcast':
+                # Generate 2-speaker podcast script
+                final_text = generate_2speaker_podcast_script(cleaned_content)
+                print(f'Job {job_id}: Generated 2-speaker podcast script length: {len(final_text)}')
+            else:
+                # Generate single-speaker podcast script (existing behavior)
+                final_text = generate_podcast_script(cleaned_content)
+                print(f'Job {job_id}: Generated single-speaker script length: {len(final_text)}')
         
         # Update progress
         self.update_state(
@@ -1043,8 +1069,8 @@ def generate_single_speaker_tts(final_text, voice, job_id):
     return audio_buffer
 
 @celery_app.task(bind=True)
-def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q'):
-    """Generate reading companion audio from document content using page-by-page chunking"""
+def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', pages_data=None):
+    """Generate reading companion audio from document content using actual page-based chunking"""
     try:
         print(f'Job {job_id}: Starting reading companion audio generation for document {document_id}')
         
@@ -1088,20 +1114,25 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             meta={
                 'current': 1,
                 'total': 4,
-                'status': 'Processing document content by chunks',
+                'status': 'Processing document by pages',
                 'job_id': job_id
             }
         )
         
-        # Clean the text for better audio output (remove markdown formatting)
-        cleaned_content = clean_text_for_tts(document_content)
+        # Use page-based chunking if pages_data is provided, otherwise fall back to content-based
+        if pages_data and len(pages_data) > 0:
+            # Use actual page structure from frontend
+            print(f'Job {job_id}: Using page-based processing with {len(pages_data)} pages')
+            chunks = pages_data
+            chunk_type = "pages"
+        else:
+            # Fall back to content-based chunking
+            print(f'Job {job_id}: No page data provided, using content-based chunking...')
+            cleaned_content = clean_text_for_tts(document_content)
+            chunks = chunk_content(cleaned_content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+            chunk_type = "content_chunks"
         
-        # Use the new chunking system for page-by-page processing
-        print(f'Job {job_id}: Content length: {len(cleaned_content)} characters, using chunking system...')
-        
-        # Split content into page-based chunks
-        chunks = chunk_content(cleaned_content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
-        print(f'Job {job_id}: Split content into {len(chunks)} chunks for processing')
+        print(f'Job {job_id}: Processing {len(chunks)} {chunk_type}')
         
         # Update progress
         self.update_state(
@@ -1109,7 +1140,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             meta={
                 'current': 2,
                 'total': 4,
-                'status': f'Generating audio for {len(chunks)} chunks',
+                'status': f'Generating audio for {len(chunks)} {chunk_type}',
                 'job_id': job_id
             }
         )
@@ -1124,9 +1155,18 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         client_tts = texttospeech.TextToSpeechClient()
         audio_buffers = []
         
-        # Process each chunk through TTS
+        # Process each chunk/page through TTS
         for i, chunk in enumerate(chunks):
-            print(f'Job {job_id}: Processing chunk {i + 1}/{len(chunks)} ({chunk["word_count"]} words)...')
+            if chunk_type == "pages":
+                # Extract content from page structure
+                chunk_content = chunk.get('content', '') or chunk.get('text', '')
+                chunk_info = f"page {chunk.get('pageNumber', i + 1)}"
+            else:
+                # Use content chunk structure
+                chunk_content = chunk.get('content', '')
+                chunk_info = f"chunk {i + 1}"
+            
+            print(f'Job {job_id}: Processing {chunk_info} ({len(chunk_content)} characters)...')
             
             # Update progress for each chunk
             self.update_state(
@@ -1134,13 +1174,13 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 meta={
                     'current': 2 + (i / len(chunks)),
                     'total': 4,
-                    'status': f'Generating audio for chunk {i + 1}/{len(chunks)}',
+                    'status': f'Generating audio for {chunk_info}',
                     'job_id': job_id
                 }
             )
             
             # Clean and process this chunk
-            chunk_text = clean_text_for_tts(chunk['content'])
+            chunk_text = clean_text_for_tts(chunk_content)
             
             # Split into TTS-friendly byte chunks
             text_chunks = split_text_by_bytes(chunk_text, 5000)
@@ -1161,11 +1201,11 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 
                 audio_buffers.append(response_tts.audio_content)
             
-            print(f'Job {job_id}: ✅ Chunk {i + 1}/{len(chunks)} processed successfully')
+            print(f'Job {job_id}: ✅ {chunk_info} processed successfully')
         
         # Consolidate all audio chunks
         audio_buffer = b''.join(audio_buffers)
-        print(f'Job {job_id}: ✅ All {len(chunks)} chunks consolidated into single audio file')
+        print(f'Job {job_id}: ✅ All {len(chunks)} {chunk_type} consolidated into single audio file')
         
         # Update progress
         self.update_state(
@@ -1220,6 +1260,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                     'audio_url': file_path,
                     'content_length': len(document_content),
                     'chunks_processed': len(chunks),
+                    'chunk_type': chunk_type,
                     'is_reading_companion': True,
                     'generated_script': False
                 },
@@ -1241,6 +1282,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 'audio_url': file_path,
                 'content_length': len(document_content),
                 'chunks_processed': len(chunks),
+                'chunk_type': chunk_type,
                 'is_reading_companion': True,
                 'generated_script': False
             },
