@@ -1044,7 +1044,7 @@ def generate_single_speaker_tts(final_text, voice, job_id):
 
 @celery_app.task(bind=True)
 def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q'):
-    """Generate reading companion audio from document content using direct text-to-speech"""
+    """Generate reading companion audio from document content using page-by-page chunking"""
     try:
         print(f'Job {job_id}: Starting reading companion audio generation for document {document_id}')
         
@@ -1053,7 +1053,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             state='PROGRESS',
             meta={
                 'current': 0,
-                'total': 3,
+                'total': 4,
                 'status': 'Fetching document content',
                 'job_id': job_id
             }
@@ -1087,14 +1087,34 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             state='PROGRESS',
             meta={
                 'current': 1,
-                'total': 3,
-                'status': 'Generating reading companion audio',
+                'total': 4,
+                'status': 'Processing document content by chunks',
+                'job_id': job_id
+            }
+        )
+        
+        # Clean the text for better audio output (remove markdown formatting)
+        cleaned_content = clean_text_for_tts(document_content)
+        
+        # Use the new chunking system for page-by-page processing
+        print(f'Job {job_id}: Content length: {len(cleaned_content)} characters, using chunking system...')
+        
+        # Split content into page-based chunks
+        chunks = chunk_content(cleaned_content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+        print(f'Job {job_id}: Split content into {len(chunks)} chunks for processing')
+        
+        # Update progress
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'current': 2,
+                'total': 4,
+                'status': f'Generating audio for {len(chunks)} chunks',
                 'job_id': job_id
             }
         )
         
         # Initialize Google TTS
-        # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
         if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
             key_path = '/tmp/google-tts-key.json'
             with open(key_path, 'w') as f:
@@ -1102,54 +1122,57 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
         
         client_tts = texttospeech.TextToSpeechClient()
-        
-        # Helper to split text into <=5000 byte chunks
-        def split_text_by_bytes(text, max_bytes):
-            encoder = text.encode('utf-8')
-            chunks = []
-            current = ''
-            for char in text:
-                test = current + char
-                if test.encode('utf-8').__sizeof__() > max_bytes:
-                    chunks.append(current)
-                    current = char
-                else:
-                    current = test
-            if current:
-                chunks.append(current)
-            return chunks
-        
-        # Clean the text for better audio output (remove markdown formatting)
-        cleaned_content = clean_text_for_tts(document_content)
-        
-        max_tts_bytes = 5000
-        text_chunks = split_text_by_bytes(cleaned_content, max_tts_bytes)
         audio_buffers = []
         
-        for chunk in text_chunks:
-            response_tts = client_tts.synthesize_speech({
-                'input': {'text': chunk},
-                'voice': {
-                    'language_code': 'en-US',
-                    'name': voice,
-                    'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-                },
-                'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-            })
+        # Process each chunk through TTS
+        for i, chunk in enumerate(chunks):
+            print(f'Job {job_id}: Processing chunk {i + 1}/{len(chunks)} ({chunk["word_count"]} words)...')
             
-            if not response_tts.audio_content:
-                raise Exception('No audio content returned from Google TTS')
+            # Update progress for each chunk
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'current': 2 + (i / len(chunks)),
+                    'total': 4,
+                    'status': f'Generating audio for chunk {i + 1}/{len(chunks)}',
+                    'job_id': job_id
+                }
+            )
             
-            audio_buffers.append(response_tts.audio_content)
+            # Clean and process this chunk
+            chunk_text = clean_text_for_tts(chunk['content'])
+            
+            # Split into TTS-friendly byte chunks
+            text_chunks = split_text_by_bytes(chunk_text, 5000)
+            
+            for text_chunk in text_chunks:
+                response_tts = client_tts.synthesize_speech({
+                    'input': {'text': text_chunk},
+                    'voice': {
+                        'language_code': 'en-US',
+                        'name': voice,
+                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                    },
+                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+                })
+                
+                if not response_tts.audio_content:
+                    raise Exception('No audio content returned from Google TTS')
+                
+                audio_buffers.append(response_tts.audio_content)
+            
+            print(f'Job {job_id}: ✅ Chunk {i + 1}/{len(chunks)} processed successfully')
         
+        # Consolidate all audio chunks
         audio_buffer = b''.join(audio_buffers)
+        print(f'Job {job_id}: ✅ All {len(chunks)} chunks consolidated into single audio file')
         
         # Update progress
         self.update_state(
             state='PROGRESS',
             meta={
-                'current': 2,
-                'total': 3,
+                'current': 3,
+                'total': 4,
                 'status': 'Uploading reading companion audio to storage',
                 'job_id': job_id
             }
@@ -1179,8 +1202,8 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         self.update_state(
             state='PROGRESS',
             meta={
-                'current': 3,
-                'total': 3,
+                'current': 4,
+                'total': 4,
                 'status': 'Reading companion audio generation completed',
                 'job_id': job_id
             }
@@ -1196,6 +1219,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 'result': {
                     'audio_url': file_path,
                     'content_length': len(document_content),
+                    'chunks_processed': len(chunks),
                     'is_reading_companion': True,
                     'generated_script': False
                 },
@@ -1216,6 +1240,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             'result': {
                 'audio_url': file_path,
                 'content_length': len(document_content),
+                'chunks_processed': len(chunks),
                 'is_reading_companion': True,
                 'generated_script': False
             },
