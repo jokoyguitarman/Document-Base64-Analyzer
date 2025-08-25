@@ -1269,36 +1269,69 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             )
             
             # Clean and process this chunk
+            print(f'Job {job_id}: Cleaning text for TTS...')
             chunk_text = clean_text_for_tts(chunk_content)
+            print(f'Job {job_id}: Text cleaned, length: {len(chunk_text)} characters')
             
             # Additional safety: split into TTS-friendly character chunks
+            print(f'Job {job_id}: Splitting into TTS-safe chunks...')
             text_chunks = split_text_for_tts_safety(chunk_text, 150)
+            print(f'Job {job_id}: Split into {len(text_chunks)} character chunks')
             
             # Further split into TTS-friendly byte chunks
+            print(f'Job {job_id}: Splitting into byte chunks...')
             final_text_chunks = []
             for text_chunk in text_chunks:
                 byte_chunks = split_text_by_bytes(text_chunk, 5000)
                 final_text_chunks.extend(byte_chunks)
+            print(f'Job {job_id}: Split into {len(final_text_chunks)} final chunks')
             
-            for text_chunk in final_text_chunks:
-                response_tts = client_tts.synthesize_speech({
-                    'input': {'text': text_chunk},
-                    'voice': {
-                        'language_code': 'en-US',
-                        'name': voice,
-                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-                    },
-                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-                })
+            # Process each chunk through TTS
+            print(f'Job {job_id}: Starting TTS processing for {len(final_text_chunks)} chunks...')
+            for chunk_index, text_chunk in enumerate(final_text_chunks):
+                print(f'Job {job_id}: Processing TTS chunk {chunk_index + 1}/{len(final_text_chunks)} ({len(text_chunk)} characters)...')
                 
-                if not response_tts.audio_content:
-                    raise Exception('No audio content returned from Google TTS')
-                
-                audio_buffers.append(response_tts.audio_content)
+                try:
+                    print(f'Job {job_id}: Calling Google TTS API for chunk {chunk_index + 1}...')
+                    
+                    # Simple TTS call with better error handling
+                    response_tts = client_tts.synthesize_speech({
+                        'input': {'text': text_chunk},
+                        'voice': {
+                            'language_code': 'en-US',
+                            'name': voice,
+                            'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                        },
+                        'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+                    })
+                    
+                    if not response_tts.audio_content:
+                        raise Exception('No audio content returned from Google TTS')
+                    
+                    audio_buffers.append(response_tts.audio_content)
+                    print(f'Job {job_id}: ✅ TTS chunk {chunk_index + 1} processed successfully')
+                    
+                except Exception as tts_error:
+                    print(f'Job {job_id}: ❌ TTS chunk {chunk_index + 1} failed: {str(tts_error)}')
+                    print(f'Job {job_id}: Error type: {type(tts_error).__name__}')
+                    print(f'Job {job_id}: Full error details: {str(tts_error)}')
+                    raise Exception(f'TTS processing failed for chunk {chunk_index + 1}: {str(tts_error)}')
             
             print(f'Job {job_id}: ✅ {chunk_info} processed successfully')
+            
+            # Update progress after each page
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'current': 2 + ((i + 1) / len(chunks)),
+                    'total': 4,
+                    'status': f'Completed {i + 1}/{len(chunks)} pages',
+                    'job_id': job_id
+                }
+            )
         
         # Consolidate all audio chunks
+        print(f'Job {job_id}: Consolidating {len(audio_buffers)} audio chunks...')
         audio_buffer = b''.join(audio_buffers)
         print(f'Job {job_id}: ✅ All {len(chunks)} {chunk_type} consolidated into single audio file')
         
