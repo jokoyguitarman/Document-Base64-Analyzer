@@ -91,18 +91,9 @@ Extract meaning and relevance. Conclude by explaining the significance — how t
 
 I don't mind if the explanations are long — in fact, I prefer detailed, information-rich responses over short ones. Prioritize clarity, completeness, and depth over brevity. Speak like an expert guiding a serious learner in a deep-dive session or masterclass. Please don't start with "this document" "this page" "this material", talk to me as if you're not reading it off a material I provided.
 
-Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach.
+**IMPORTANT FORMATTING NOTE:** When creating headings or section titles, always end them with a colon (:). For example: "Main Idea:", "Key Insights:", "Expert Analysis:", etc.
 
-Please format your analysis using proper HTML tags to enhance readability and structure:
-- Use <h2> for main section headings (e.g., "Page Analysis", "Key Insights")
-- Use <h3> for subsection headings (e.g., "Main Idea", "Detailed Walkthrough", "Expert Insights")
-- Use <p> for paragraphs and explanations
-- Use <ul> and <li> for lists and bullet points
-- Use <strong> for emphasis on key terms and concepts
-- Use <em> for secondary emphasis and important details
-- Use <div class="insight-section"> for major insight sections
-- Structure the content hierarchically for better organization and readability
-- Ensure the HTML is properly formatted and valid"""
+Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach."""
             },
             {
                 "type": "image_url",
@@ -164,20 +155,17 @@ Teach, don't just summarize. Begin by identifying the main idea or argument. The
 
 Interpret the data or visuals. Don't just describe what's shown — help me understand what comparisons are being made, what insights are hidden in the data, and what it reveals that isn't immediately obvious.
 
-Clarify and anticipate confusion. If any concept might be complex, counterintuitive, or misinterpreted, break it down further.
+Add expert insight. Expand with deeper context, cross-references, or real-world applications. Explain assumptions, limitations, or nuance that an expert would naturally consider.
 
-Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach.
+Clarify and anticipate confusion. If any concept might be complex, counterintuitive, or misinterpreted, break it down further. Use analogies, examples, or step-by-step logic to reinforce the idea.
 
-Please format your analysis using proper HTML tags to enhance readability and structure:
-- Use <h2> for main section headings (e.g., "Page Analysis", "Key Insights")
-- Use <h3> for subsection headings (e.g., "Main Idea", "Detailed Walkthrough", "Expert Insights")
-- Use <p> for paragraphs and explanations
-- Use <ul> and <li> for lists and bullet points
-- Use <strong> for emphasis on key terms and concepts
-- Use <em> for secondary emphasis and important details
-- Use <div class="insight-section"> for major insight sections
-- Structure the content hierarchically for better organization and readability
-- Ensure the HTML is properly formatted and valid"""
+Extract meaning and relevance. Conclude by explaining the significance — how this changes our understanding, why it matters, or how it connects to a larger framework.
+
+I don't mind if the explanations are long — in fact, I prefer detailed, information-rich responses over short ones. Prioritize clarity, completeness, and depth over brevity. Speak like an expert guiding a serious learner in a deep-dive session or masterclass. Please don't start with "this document" "this page" "this material", talk to me as if you're not reading it off a material I provided.
+
+**IMPORTANT FORMATTING NOTE:** When creating headings or section titles, always end them with a colon (:). For example: "Main Idea:", "Key Insights:", "Expert Analysis:", etc.
+
+Analyze page {page_number} of this {total_pages}-page {file_type} document using this approach."""
             },
             {
                 "type": "image_url",
