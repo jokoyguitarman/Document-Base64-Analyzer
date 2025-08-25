@@ -1020,9 +1020,8 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             script_chunks.append(script_chunk)
             print(f'Job {job_id}: ✅ Script generated for page {chunk.get("pageNumber", i + 1)}')
         
-        # Combine all script chunks
-        final_text = '\n\n'.join(script_chunks)
-        print(f'Job {job_id}: Generated script from {len(chunks)} pages, total length: {len(final_text)}')
+        # Process each page script through TTS separately (page-by-page processing)
+        print(f'Job {job_id}: Generated scripts for {len(chunks)} pages, now processing each page through TTS...')
         
         # Update progress
         self.update_state(
@@ -1030,19 +1029,85 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             meta={
                 'current': 2,
                 'total': 4,
-                'status': 'Generating audio',
+                'status': f'Generating audio for {len(chunks)} pages',
                 'job_id': job_id
             }
         )
         
-        # Generate audio based on style
-        if audio_style == '2speaker_podcast':
-            # For 2-speaker podcast, determine female voice based on male voice
-            voice_female = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'
-            audio_buffer = generate_2speaker_tts_audio(final_text, voice, voice_female, job_id)
-        else:
-            # Single speaker TTS (existing behavior)
-            audio_buffer = generate_single_speaker_tts(final_text, voice, job_id)
+        # Initialize Google TTS
+        if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
+            key_path = '/tmp/google-tts-key.json'
+            with open(key_path, 'w') as f:
+                f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
+        
+        client_tts = texttospeech.TextToSpeechClient()
+        audio_buffers = []
+        
+        # Process each page script through TTS
+        for i, (chunk, script_chunk) in enumerate(zip(chunks, script_chunks)):
+            page_number = chunk.get('pageNumber', i + 1)
+            print(f'Job {job_id}: Processing TTS for page {page_number}/{len(chunks)}...')
+            
+            # Update progress for each page
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'current': 2 + (i / len(chunks)),
+                    'total': 4,
+                    'status': f'Generating audio for page {page_number}/{len(chunks)}',
+                    'job_id': job_id
+                }
+            )
+            
+            # Clean and process this page script
+            print(f'Job {job_id}: Cleaning text for page {page_number}...')
+            cleaned_script = clean_text_for_tts(script_chunk)
+            print(f'Job {job_id}: Page {page_number} script cleaned, length: {len(cleaned_script)} characters')
+            
+            # Process entire page through TTS (no chunking)
+            print(f'Job {job_id}: Processing entire page {page_number} through TTS...')
+            
+            try:
+                print(f'Job {job_id}: Calling Google TTS API for page {page_number}...')
+                
+                response_tts = client_tts.synthesize_speech({
+                    'input': {'text': cleaned_script},
+                    'voice': {
+                        'language_code': 'en-US',
+                        'name': voice,
+                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                    },
+                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+                })
+                
+                if not response_tts.audio_content:
+                    raise Exception('No audio content returned from Google TTS')
+                
+                audio_buffers.append(response_tts.audio_content)
+                print(f'Job {job_id}: ✅ Page {page_number} TTS completed successfully')
+                
+            except Exception as tts_error:
+                print(f'Job {job_id}: ❌ TTS failed for page {page_number}: {str(tts_error)}')
+                print(f'Job {job_id}: Error type: {type(tts_error).__name__}')
+                print(f'Job {job_id}: Full error details: {str(tts_error)}')
+                raise Exception(f'TTS processing failed for page {page_number}: {str(tts_error)}')
+            
+            # Update progress after each page
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'current': 2 + ((i + 1) / len(chunks)),
+                    'total': 4,
+                    'status': f'Completed TTS for {i + 1}/{len(chunks)} pages',
+                    'job_id': job_id
+                }
+            )
+        
+        # Consolidate all page audio into final audio buffer
+        print(f'Job {job_id}: Consolidating audio from {len(audio_buffers)} pages...')
+        audio_buffer = b''.join(audio_buffers)
+        print(f'Job {job_id}: ✅ All {len(chunks)} pages consolidated into single audio file')
         
         # Update progress
         self.update_state(
@@ -1092,7 +1157,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             'status': 'completed',
             'result': {
                 'audio_url': file_path,
-                'script_length': len(final_text),
+                'pages_processed': len(chunks),
                 'audio_style': audio_style,
                 'is_summary': True,
                 'generated_script': True
@@ -1268,56 +1333,39 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 }
             )
             
-            # Clean and process this chunk
+            # Clean and process this page
             print(f'Job {job_id}: Cleaning text for TTS...')
             chunk_text = clean_text_for_tts(chunk_content)
             print(f'Job {job_id}: Text cleaned, length: {len(chunk_text)} characters')
             
-            # Additional safety: split into TTS-friendly character chunks
-            print(f'Job {job_id}: Splitting into TTS-safe chunks...')
-            text_chunks = split_text_for_tts_safety(chunk_text, 150)
-            print(f'Job {job_id}: Split into {len(text_chunks)} character chunks')
+            # Process entire page through TTS (no chunking)
+            print(f'Job {job_id}: Processing entire {chunk_info} through TTS...')
             
-            # Further split into TTS-friendly byte chunks
-            print(f'Job {job_id}: Splitting into byte chunks...')
-            final_text_chunks = []
-            for text_chunk in text_chunks:
-                byte_chunks = split_text_by_bytes(text_chunk, 5000)
-                final_text_chunks.extend(byte_chunks)
-            print(f'Job {job_id}: Split into {len(final_text_chunks)} final chunks')
-            
-            # Process each chunk through TTS
-            print(f'Job {job_id}: Starting TTS processing for {len(final_text_chunks)} chunks...')
-            for chunk_index, text_chunk in enumerate(final_text_chunks):
-                print(f'Job {job_id}: Processing TTS chunk {chunk_index + 1}/{len(final_text_chunks)} ({len(text_chunk)} characters)...')
+            try:
+                print(f'Job {job_id}: Calling Google TTS API for {chunk_info}...')
                 
-                try:
-                    print(f'Job {job_id}: Calling Google TTS API for chunk {chunk_index + 1}...')
-                    
-                    # Simple TTS call with better error handling
-                    response_tts = client_tts.synthesize_speech({
-                        'input': {'text': text_chunk},
-                        'voice': {
-                            'language_code': 'en-US',
-                            'name': voice,
-                            'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-                        },
-                        'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-                    })
-                    
-                    if not response_tts.audio_content:
-                        raise Exception('No audio content returned from Google TTS')
-                    
-                    audio_buffers.append(response_tts.audio_content)
-                    print(f'Job {job_id}: ✅ TTS chunk {chunk_index + 1} processed successfully')
-                    
-                except Exception as tts_error:
-                    print(f'Job {job_id}: ❌ TTS chunk {chunk_index + 1} failed: {str(tts_error)}')
-                    print(f'Job {job_id}: Error type: {type(tts_error).__name__}')
-                    print(f'Job {job_id}: Full error details: {str(tts_error)}')
-                    raise Exception(f'TTS processing failed for chunk {chunk_index + 1}: {str(tts_error)}')
-            
-            print(f'Job {job_id}: ✅ {chunk_info} processed successfully')
+                # Simple TTS call with better error handling
+                response_tts = client_tts.synthesize_speech({
+                    'input': {'text': chunk_text},
+                    'voice': {
+                        'language_code': 'en-US',
+                        'name': voice,
+                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                    },
+                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
+                })
+                
+                if not response_tts.audio_content:
+                    raise Exception('No audio content returned from Google TTS')
+                
+                audio_buffers.append(response_tts.audio_content)
+                print(f'Job {job_id}: ✅ {chunk_info} TTS completed successfully')
+                
+            except Exception as tts_error:
+                print(f'Job {job_id}: ❌ TTS failed for {chunk_info}: {str(tts_error)}')
+                print(f'Job {job_id}: Error type: {type(tts_error).__name__}')
+                print(f'Job {job_id}: Full error details: {str(tts_error)}')
+                raise Exception(f'TTS processing failed for {chunk_info}: {str(tts_error)}')
             
             # Update progress after each page
             self.update_state(
@@ -1330,10 +1378,10 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
                 }
             )
         
-        # Consolidate all audio chunks
-        print(f'Job {job_id}: Consolidating {len(audio_buffers)} audio chunks...')
+        # Consolidate all page audio
+        print(f'Job {job_id}: Consolidating audio from {len(audio_buffers)} pages...')
         audio_buffer = b''.join(audio_buffers)
-        print(f'Job {job_id}: ✅ All {len(chunks)} {chunk_type} consolidated into single audio file')
+        print(f'Job {job_id}: ✅ All {len(chunks)} pages consolidated into single audio file')
         
         # Update progress
         self.update_state(
