@@ -982,31 +982,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Store results via webhook
-        try:
-            webhook_url = os.getenv('WEBHOOK_URL', 'https://studycompanion.io/api/update-job-results')
-            webhook_data = {
-                'job_id': job_id,
-                'user_id': user_id,
-                'status': 'completed',
-                'result': {
-                    'audio_url': file_path,
-                    'script_length': len(final_text),
-                    'audio_style': audio_style,
-                    'is_summary': True,
-                    'generated_script': True
-                },
-                'processing_time': time.time(),
-                'completed_at': datetime.now().isoformat()
-            }
-            
-            response = requests.post(webhook_url, json=webhook_data, timeout=30)
-            if response.status_code == 200:
-                print(f'Job {job_id}: ✅ Results stored in database')
-            else:
-                print(f'Job {job_id}: ⚠️ Failed to store results in database: {response.status_code}')
-        except Exception as e:
-            print(f'Job {job_id}: ⚠️ Error storing results in database: {str(e)}')
+
         
         return {
             'status': 'completed',
@@ -1249,32 +1225,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             }
         )
         
-        # Store results via webhook
-        try:
-            webhook_url = os.getenv('WEBHOOK_URL', 'https://studycompanion.io/api/update-job-results')
-            webhook_data = {
-                'job_id': job_id,
-                'user_id': user_id,
-                'status': 'completed',
-                'result': {
-                    'audio_url': file_path,
-                    'content_length': len(document_content),
-                    'chunks_processed': len(chunks),
-                    'chunk_type': chunk_type,
-                    'is_reading_companion': True,
-                    'generated_script': False
-                },
-                'processing_time': time.time(),
-                'completed_at': datetime.now().isoformat()
-            }
-            
-            response = requests.post(webhook_url, json=webhook_data, timeout=30)
-            if response.status_code == 200:
-                print(f'Job {job_id}: ✅ Results stored in database')
-            else:
-                print(f'Job {job_id}: ⚠️ Failed to store results in database: {response.status_code}')
-        except Exception as e:
-            print(f'Job {job_id}: ⚠️ Error storing results in database: {str(e)}')
+
         
         return {
             'status': 'completed',
