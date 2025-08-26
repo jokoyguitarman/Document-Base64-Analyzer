@@ -114,7 +114,7 @@ def clean_text_for_tts(text):
     
     return clean.strip()
 
-def generate_2speaker_podcast_script_chunk(content, chunk_index, total_chunks, speaker_1_name="Alex", speaker_2_name="Sam"):
+def generate_2speaker_podcast_script_chunk(content, chunk_index, total_chunks, speaker_1_name="R", speaker_2_name="S"):
     """Generate 2-speaker podcast script for a single chunk"""
     if not client:
         raise Exception('OpenAI is not available')
@@ -131,6 +131,7 @@ def generate_2speaker_podcast_script_chunk(content, chunk_index, total_chunks, s
 - Make it sound like two friends having an engaging discussion, not a formal presentation
 - Avoid any meta-language about "this document" or "this content" - speak naturally
 - Keep each speaker's lines reasonably short for TTS processing
+- Characters can call each other by names in the dialogue, but speakers are always labeled as {speaker_1_name}: and {speaker_2_name}:
 
 **FORMAT:**
 {speaker_1_name}: [dialogue]
@@ -218,8 +219,8 @@ def parse_speaker_segments(script):
     """Parse podcast script to identify speaker changes and text"""
     import re
     
-    # Pattern to match speaker lines: "Speaker: text"
-    pattern = r'^(\w+):\s*(.+?)(?=\n\w+:|$)'
+    # Pattern to match speaker lines: "R: text" or "S: text"
+    pattern = r'^(R|S):\s*(.+?)(?=\n[R|S]:|$)'
     
     segments = []
     lines = script.split('\n')
@@ -231,8 +232,8 @@ def parse_speaker_segments(script):
         if not line:
             continue
             
-        # Check if this line starts with a speaker name
-        match = re.match(r'^(\w+):\s*(.+)', line)
+        # Check if this line starts with R: or S:
+        match = re.match(r'^(R|S):\s*(.+)', line)
         if match:
             # Save previous segment if exists
             if current_speaker and current_text:
@@ -242,7 +243,7 @@ def parse_speaker_segments(script):
                 })
             
             # Start new segment
-            current_speaker = match.group(1)
+            current_speaker = match.group(1)  # R or S
             current_text = match.group(2)
         else:
             # Continue current speaker's text
@@ -259,23 +260,105 @@ def parse_speaker_segments(script):
     return segments
 
 def generate_2speaker_tts_audio(script, voice_male, voice_female, job_id):
-    """Generate TTS audio with alternating speakers for podcast style"""
+    """Generate TTS audio with multiple speakers using Google's Multi-Speaker TTS"""
+    
+    # Parse the script to identify speaker changes
+    speaker_segments = parse_speaker_segments(script)
+    
+    # Convert to Google's Multi-Speaker format
+    turns = []
+    for segment in speaker_segments:
+        speaker = segment['speaker']
+        text = segment['text']
+        
+        # Map speaker names to Google's speaker identifiers
+        if speaker == "R":  # Male speaker
+            google_speaker = "R"
+        else:  # speaker == "S" - Female speaker
+            google_speaker = "S"
+        
+        turns.append({
+            'text': text,
+            'speaker': google_speaker
+        })
+    
+    print(f'Job {job_id}: Generated {len(turns)} speaker turns for Multi-Speaker TTS')
+    
+    # Use Google's Multi-Speaker TTS
+    try:
+        # Import the beta version for multi-speaker support
+        from google.cloud import texttospeech_v1beta1 as texttospeech
+        
+        client_tts = texttospeech.TextToSpeechClient()
+        
+        # Create multi-speaker markup
+        multi_speaker_markup = texttospeech.MultiSpeakerMarkup(
+            turns=[
+                texttospeech.MultiSpeakerMarkup.Turn(
+                    text=turn['text'],
+                    speaker=turn['speaker']
+                ) for turn in turns
+            ]
+        )
+        
+        # Set the text input to be synthesized
+        synthesis_input = texttospeech.SynthesisInput(
+            multi_speaker_markup=multi_speaker_markup
+        )
+        
+        # Build the voice request - use the multi-speaker voice
+        voice = texttospeech.VoiceSelectionParams(
+            language_code="en-US",
+            name="en-US-Studio-MultiSpeaker"
+        )
+        
+        # Select the type of audio file you want returned
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+        
+        print(f'Job {job_id}: Calling Google Multi-Speaker TTS API...')
+        
+        # Perform the text-to-speech request
+        response = client_tts.synthesize_speech(
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config
+        )
+        
+        if not response.audio_content:
+            raise Exception('No audio content returned from Google Multi-Speaker TTS')
+        
+        print(f'Job {job_id}: ✅ Multi-Speaker TTS completed successfully')
+        return response.audio_content
+        
+    except ImportError:
+        print(f'Job {job_id}: ⚠️ Multi-Speaker TTS not available, falling back to single-speaker with voice switching')
+        # Fallback to the old method if multi-speaker not available
+        return generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id)
+    except Exception as e:
+        print(f'Job {job_id}: ❌ Multi-Speaker TTS failed: {str(e)}, falling back to single-speaker')
+        # Fallback to the old method if multi-speaker fails
+        return generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id)
+
+def generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id):
+    """Fallback method for 2-speaker TTS when multi-speaker is not available"""
+    print(f'Job {job_id}: Using fallback 2-speaker TTS method')
     
     # Parse the script to identify speaker changes
     speaker_segments = parse_speaker_segments(script)
     
     audio_buffers = []
-    current_speaker = None
     
     for segment in speaker_segments:
         speaker = segment['speaker']
         text = segment['text']
         
         # Determine which voice to use
-        if speaker.lower() in ['alex', 'speaker1', 'male']:
+        if speaker == "R":  # Male speaker
             voice = voice_male
             gender = texttospeech.SsmlVoiceGender.MALE
-        else:
+        else:  # speaker == "S" - Female speaker
             voice = voice_female
             gender = texttospeech.SsmlVoiceGender.FEMALE
         
@@ -1013,7 +1096,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             cleaned_chunk = clean_text_for_tts(chunk_content)
             
             if audio_style == '2speaker_podcast':
-                script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks))
+                script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks), "R", "S")
             else:
                 script_chunk = generate_podcast_script_chunk(cleaned_chunk, i, len(chunks))
             
@@ -1071,19 +1154,17 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             try:
                 print(f'Job {job_id}: Calling Google TTS API for page {page_number}...')
                 
-                # For 2-speaker podcast, use alternating voices
+                # For 2-speaker podcast, use the specialized multi-speaker function
                 if audio_style == '2speaker_podcast':
-                    # Determine which voice to use for this page (alternate between male/female)
-                    if i % 2 == 0:
-                        current_voice = voice  # Male voice
-                        current_gender = texttospeech.SsmlVoiceGender.MALE
-                        print(f'Job {job_id}: Using male voice for page {page_number}')
-                    else:
-                        current_voice = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'  # Female voice
-                        current_gender = texttospeech.SsmlVoiceGender.FEMALE
-                        print(f'Job {job_id}: Using female voice for page {page_number}')
+                    print(f'Job {job_id}: Using 2-speaker podcast TTS processing for page {page_number}...')
+                    # Use the multi-speaker TTS function for 2-speaker podcast
+                    voice_female = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'
+                    page_audio = generate_2speaker_tts_audio(cleaned_script, voice, voice_female, job_id)
+                    audio_buffers.append(page_audio)
+                    print(f'Job {job_id}: ✅ Page {page_number} 2-speaker TTS completed successfully')
+                    continue
                 else:
-                    # Single speaker
+                    # Single speaker - use regular TTS
                     current_voice = voice
                     current_gender = texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
                 
