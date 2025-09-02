@@ -1331,7 +1331,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         # Upload to Supabase Storage
         file_path = f'audio/{document_id}-{audio_style}-{int(time.time())}.mp3'
         
-        upload_response = supabase.storage.from_('audio').upload(
+        upload_response = supabase.storage.from_('documents').upload(
             file_path,
             audio_buffer,
             {'content-type': 'audio/mpeg', 'upsert': 'true'}
@@ -1605,7 +1605,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         # Upload to Supabase Storage with reading companion naming
         file_path = f'audio/{document_id}-reading-{int(time.time())}.mp3'
         
-        upload_response = supabase.storage.from_('audio').upload(
+        upload_response = supabase.storage.from_('documents').upload(
             file_path,
             audio_buffer,
             {'content-type': 'audio/mpeg', 'upsert': 'true'}
