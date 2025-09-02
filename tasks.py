@@ -82,7 +82,8 @@ def clean_text_for_tts(text):
                 for part in parts:
                     if part.strip():
                         processed_sentences.append(part.strip() + '.')
-            elif ':' in sentence:
+            elif ':' in sentence and not re.match(r'^(R|S):', sentence.strip()):
+                # Don't split on colons if it's a speaker marker (R: or S:)
                 parts = sentence.split(': ')
                 for part in parts:
                     if part.strip():
@@ -106,6 +107,97 @@ def clean_text_for_tts(text):
     
     # Join sentences back together
     clean = ' '.join(processed_sentences)
+    
+    # Remove extra spaces and normalize whitespace
+    clean = re.sub(r'\s{2,}', ' ', clean)
+    # Remove extra newlines
+    clean = re.sub(r'\n{3,}', '\n\n', clean)
+    
+    return clean.strip()
+
+def clean_text_for_tts_preserve_speakers(text):
+    """Clean text for TTS while preserving R: and S: speaker markers"""
+    import re
+    
+    if not text:
+        return ""
+    
+    # Remove citations first
+    # Remove URLs
+    clean = re.sub(r'https?://[^\s)]+', '', text)
+    # Remove parenthetical citations with URLs
+    clean = re.sub(r'\([^)]*https?://[^)]*\)', '', clean)
+    # Remove [number] citations
+    clean = re.sub(r'\[\d+\]', '', clean)
+    # Remove bibliography section and everything after
+    clean = re.sub(r'Bibliography:[\s\S]*', '', clean, flags=re.IGNORECASE)
+    
+    # Remove markdown formatting
+    # Remove headings (##, ###, etc.)
+    clean = re.sub(r'^#+\s?', '', clean, flags=re.MULTILINE)
+    # Remove bold/italic (**text**, *text*, __text__, _text_)
+    clean = re.sub(r'\*\*([^*]+)\*\*', r'\1', clean)
+    clean = re.sub(r'\*([^*]+)\*', r'\1', clean)
+    clean = re.sub(r'__([^_]+)__', r'\1', clean)
+    clean = re.sub(r'_([^_]+)_', r'\1', clean)
+    # Remove unordered list markers
+    clean = re.sub(r'^\s*[-*+]\s+', '', clean, flags=re.MULTILINE)
+    # Remove ordered list markers
+    clean = re.sub(r'^\s*\d+\.\s+', '', clean, flags=re.MULTILINE)
+    # Remove blockquotes
+    clean = re.sub(r'^>\s?', '', clean, flags=re.MULTILINE)
+    # Remove inline code
+    clean = re.sub(r'`([^`]+)`', r'\1', clean)
+    # Remove code blocks
+    clean = re.sub(r'```[\s\S]*?```', '', clean)
+    
+    # Split into lines to preserve speaker markers
+    lines = clean.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Check if this line starts with R: or S:
+        if re.match(r'^(R|S):', line):
+            # This is a speaker line - preserve it exactly
+            processed_lines.append(line)
+        else:
+            # This is dialogue - clean it normally
+            # Split very long sentences for TTS compatibility
+            if len(line) > 200:
+                # Try to split on natural break points
+                if ',' in line:
+                    parts = line.split(', ')
+                    for part in parts:
+                        if part.strip():
+                            processed_lines.append(part.strip() + '.')
+                elif ';' in line:
+                    parts = line.split('; ')
+                    for part in parts:
+                        if part.strip():
+                            processed_lines.append(part.strip() + '.')
+                else:
+                    # Force split at word boundaries around 150 characters
+                    words = line.split()
+                    current_part = ""
+                    for word in words:
+                        if len(current_part + " " + word) > 150:
+                            if current_part:
+                                processed_lines.append(current_part.strip() + '.')
+                            current_part = word
+                        else:
+                            current_part += " " + word if current_part else word
+                    if current_part:
+                        processed_lines.append(current_part.strip() + '.')
+            else:
+                if line.strip():
+                    processed_lines.append(line.strip())
+    
+    # Join lines back together
+    clean = '\n'.join(processed_lines)
     
     # Remove extra spaces and normalize whitespace
     clean = re.sub(r'\s{2,}', ' ', clean)
@@ -219,6 +311,9 @@ def parse_speaker_segments(script):
     """Parse podcast script to identify speaker changes and text"""
     import re
     
+    print(f'🔍 DEBUG - Parsing script with {len(script)} characters')
+    print(f'🔍 DEBUG - Script preview: {script[:300]}...')
+    
     # Pattern to match speaker lines: "R: text" or "S: text"
     pattern = r'^(R|S):\s*(.+?)(?=\n[R|S]:|$)'
     
@@ -227,7 +322,9 @@ def parse_speaker_segments(script):
     current_speaker = None
     current_text = ""
     
-    for line in lines:
+    print(f'🔍 DEBUG - Found {len(lines)} lines to process')
+    
+    for i, line in enumerate(lines):
         line = line.strip()
         if not line:
             continue
@@ -235,6 +332,7 @@ def parse_speaker_segments(script):
         # Check if this line starts with R: or S:
         match = re.match(r'^(R|S):\s*(.+)', line)
         if match:
+            print(f'🔍 DEBUG - Line {i+1}: Found speaker {match.group(1)} with text: {match.group(2)[:50]}...')
             # Save previous segment if exists
             if current_speaker and current_text:
                 segments.append({
@@ -256,6 +354,10 @@ def parse_speaker_segments(script):
             'speaker': current_speaker,
             'text': current_text.strip()
         })
+    
+    print(f'🔍 DEBUG - Parsed {len(segments)} speaker segments')
+    for i, seg in enumerate(segments):
+        print(f'🔍 DEBUG - Segment {i+1}: {seg["speaker"]}: {seg["text"][:50]}...')
     
     return segments
 
@@ -286,8 +388,10 @@ def generate_2speaker_tts_audio(script, voice_male, voice_female, job_id):
     
     # Use Google's Multi-Speaker TTS
     try:
+        print(f'Job {job_id}: 🔍 Attempting to import Google Multi-Speaker TTS...')
         # Import the beta version for multi-speaker support
         from google.cloud import texttospeech_v1beta1 as texttospeech
+        print(f'Job {job_id}: ✅ Successfully imported Google Multi-Speaker TTS')
         
         client_tts = texttospeech.TextToSpeechClient()
         
@@ -1097,6 +1201,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             
             if audio_style == '2speaker_podcast':
                 script_chunk = generate_2speaker_podcast_script_chunk(cleaned_chunk, i, len(chunks), "R", "S")
+                print(f'Job {job_id}: 🔍 DEBUG - 2-speaker script preview: {script_chunk[:200]}...')
             else:
                 script_chunk = generate_podcast_script_chunk(cleaned_chunk, i, len(chunks))
             
@@ -1145,7 +1250,12 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             
             # Clean and process this page script
             print(f'Job {job_id}: Cleaning text for page {page_number}...')
-            cleaned_script = clean_text_for_tts(script_chunk)
+            if audio_style == '2speaker_podcast':
+                # For 2-speaker podcast, preserve speaker markers (R: and S:)
+                cleaned_script = clean_text_for_tts_preserve_speakers(script_chunk)
+                print(f'Job {job_id}: 🔍 DEBUG - After cleaning (preserving speakers): {cleaned_script[:400]}...')
+            else:
+                cleaned_script = clean_text_for_tts(script_chunk)
             print(f'Job {job_id}: Page {page_number} script cleaned, length: {len(cleaned_script)} characters')
             
             # Process entire page through TTS (no chunking)
@@ -1157,6 +1267,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
                 # For 2-speaker podcast, use the specialized multi-speaker function
                 if audio_style == '2speaker_podcast':
                     print(f'Job {job_id}: Using 2-speaker podcast TTS processing for page {page_number}...')
+                    print(f'Job {job_id}: 🔍 DEBUG - Script to process: {cleaned_script[:300]}...')
                     # Use the multi-speaker TTS function for 2-speaker podcast
                     voice_female = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'
                     page_audio = generate_2speaker_tts_audio(cleaned_script, voice, voice_female, job_id)
@@ -1220,7 +1331,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         # Upload to Supabase Storage
         file_path = f'audio/{document_id}-{audio_style}-{int(time.time())}.mp3'
         
-        upload_response = supabase.storage.from_('documents').upload(
+        upload_response = supabase.storage.from_('audio').upload(
             file_path,
             audio_buffer,
             {'content-type': 'audio/mpeg', 'upsert': 'true'}
@@ -1494,7 +1605,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
         # Upload to Supabase Storage with reading companion naming
         file_path = f'audio/{document_id}-reading-{int(time.time())}.mp3'
         
-        upload_response = supabase.storage.from_('documents').upload(
+        upload_response = supabase.storage.from_('audio').upload(
             file_path,
             audio_buffer,
             {'content-type': 'audio/mpeg', 'upsert': 'true'}
