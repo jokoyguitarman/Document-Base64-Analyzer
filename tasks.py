@@ -4,7 +4,6 @@ import time
 from datetime import datetime
 import openai
 import requests
-from google.cloud import texttospeech
 from celery_config import celery_app
 
 # Configure OpenAI client
@@ -362,92 +361,52 @@ def parse_speaker_segments(script):
     return segments
 
 def generate_2speaker_tts_audio(script, voice_male, voice_female, job_id):
-    """Generate TTS audio with multiple speakers using Google's Multi-Speaker TTS"""
+    """Generate TTS audio with multiple speakers using OpenAI TTS"""
     
     # Parse the script to identify speaker changes
     speaker_segments = parse_speaker_segments(script)
     
-    # Convert to Google's Multi-Speaker format
-    turns = []
-    for segment in speaker_segments:
+    print(f'Job {job_id}: Generated {len(speaker_segments)} speaker segments for OpenAI TTS')
+    
+    # Process each speaker segment with appropriate voice
+    audio_buffers = []
+    
+    for i, segment in enumerate(speaker_segments):
         speaker = segment['speaker']
         text = segment['text']
         
-        # Map speaker names to Google's speaker identifiers
+        # Map speaker to voice ID
         if speaker == "R":  # Male speaker
-            google_speaker = "R"
+            voice_id = voice_male if isValidVoiceId(voice_male) else 'echo'
         else:  # speaker == "S" - Female speaker
-            google_speaker = "S"
+            voice_id = voice_female if isValidVoiceId(voice_female) else 'alloy'
         
-        turns.append({
-            'text': text,
-            'speaker': google_speaker
-        })
+        print(f'Job {job_id}: Processing speaker {speaker} with voice {voice_id}')
+        
+        # Generate audio for this segment
+        try:
+            segment_audio = generate_openai_tts_audio(text, voice_id, job_id)
+            audio_buffers.append(segment_audio)
+            
+            # Add a small pause between speakers for natural flow
+            if i < len(speaker_segments) - 1:
+                # Generate a brief pause (empty audio buffer)
+                pause_audio = b''  # For now, no pause - can be enhanced later
+                audio_buffers.append(pause_audio)
+                
+        except Exception as e:
+            print(f'Job {job_id}: ❌ Failed to generate audio for speaker {speaker}: {str(e)}')
+            # Continue with other segments
+            continue
     
-    print(f'Job {job_id}: Generated {len(turns)} speaker turns for Multi-Speaker TTS')
-    
-    # Use Google's Multi-Speaker TTS
-    try:
-        print(f'Job {job_id}: 🔍 Attempting to import Google Multi-Speaker TTS...')
-        # Import the beta version for multi-speaker support
-        from google.cloud import texttospeech_v1beta1 as texttospeech
-        print(f'Job {job_id}: ✅ Successfully imported Google Multi-Speaker TTS')
-        
-        client_tts = texttospeech.TextToSpeechClient()
-        
-        # Create multi-speaker markup
-        multi_speaker_markup = texttospeech.MultiSpeakerMarkup(
-            turns=[
-                texttospeech.MultiSpeakerMarkup.Turn(
-                    text=turn['text'],
-                    speaker=turn['speaker']
-                ) for turn in turns
-            ]
-        )
-        
-        # Set the text input to be synthesized
-        synthesis_input = texttospeech.SynthesisInput(
-            multi_speaker_markup=multi_speaker_markup
-        )
-        
-        # Build the voice request - use the multi-speaker voice
-        voice = texttospeech.VoiceSelectionParams(
-            language_code="en-US",
-            name="en-US-Studio-MultiSpeaker"
-        )
-        
-        # Select the type of audio file you want returned
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3
-        )
-        
-        print(f'Job {job_id}: Calling Google Multi-Speaker TTS API...')
-        
-        # Perform the text-to-speech request
-        response = client_tts.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config
-        )
-        
-        if not response.audio_content:
-            raise Exception('No audio content returned from Google Multi-Speaker TTS')
-        
-        print(f'Job {job_id}: ✅ Multi-Speaker TTS completed successfully')
-        return response.audio_content
-        
-    except ImportError:
-        print(f'Job {job_id}: ⚠️ Multi-Speaker TTS not available, falling back to single-speaker with voice switching')
-        # Fallback to the old method if multi-speaker not available
-        return generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id)
-    except Exception as e:
-        print(f'Job {job_id}: ❌ Multi-Speaker TTS failed: {str(e)}, falling back to single-speaker')
-        # Fallback to the old method if multi-speaker fails
-        return generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id)
+    # Consolidate all audio segments
+    consolidated_audio = b''.join(audio_buffers)
+    print(f'Job {job_id}: ✅ 2-speaker TTS completed with {len(audio_buffers)} segments')
+    return consolidated_audio
 
 def generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_id):
-    """Fallback method for 2-speaker TTS when multi-speaker is not available"""
-    print(f'Job {job_id}: Using fallback 2-speaker TTS method')
+    """Fallback method for 2-speaker TTS using OpenAI TTS"""
+    print(f'Job {job_id}: Using fallback 2-speaker TTS method with OpenAI')
     
     # Parse the script to identify speaker changes
     speaker_segments = parse_speaker_segments(script)
@@ -460,15 +419,17 @@ def generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_i
         
         # Determine which voice to use
         if speaker == "R":  # Male speaker
-            voice = voice_male
-            gender = texttospeech.SsmlVoiceGender.MALE
+            voice_id = voice_male if isValidVoiceId(voice_male) else 'echo'
         else:  # speaker == "S" - Female speaker
-            voice = voice_female
-            gender = texttospeech.SsmlVoiceGender.FEMALE
+            voice_id = voice_female if isValidVoiceId(voice_female) else 'alloy'
         
-        # Generate audio for this speaker segment
-        audio_buffer = generate_speaker_audio(text, voice, gender)
-        audio_buffers.append(audio_buffer)
+        # Generate audio for this speaker segment using OpenAI TTS
+        try:
+            audio_buffer = generate_openai_tts_audio(text, voice_id, job_id)
+            audio_buffers.append(audio_buffer)
+        except Exception as e:
+            print(f'Job {job_id}: ❌ Failed to generate audio for speaker {speaker}: {str(e)}')
+            continue
         
         # Add a small pause between speakers for natural flow
         if len(audio_buffers) > 1:
@@ -479,53 +440,10 @@ def generate_2speaker_tts_audio_fallback(script, voice_male, voice_female, job_i
     consolidated_audio = b''.join(audio_buffers)
     return consolidated_audio
 
-def generate_speaker_audio(text, voice, gender):
-    """Generate TTS audio for a specific speaker"""
-    client_tts = texttospeech.TextToSpeechClient()
-    
-    # Clean text for TTS
-    cleaned_text = clean_text_for_tts(text)
-    
-    # Split into TTS-friendly chunks if needed
-    text_chunks = split_text_by_bytes(cleaned_text, 5000)
-    audio_buffers = []
-    
-    for chunk in text_chunks:
-        response_tts = client_tts.synthesize_speech({
-            'input': {'text': chunk},
-            'voice': {
-                'language_code': 'en-US',
-                'name': voice,
-                'ssml_gender': gender
-            },
-            'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-        })
-        
-        if response_tts.audio_content:
-            audio_buffers.append(response_tts.audio_content)
-    
-    return b''.join(audio_buffers)
-
 def generate_pause_audio(duration_seconds):
     """Generate a brief pause between speakers"""
     # For now, return empty buffer - this can be enhanced later with actual pause generation
     return b''
-
-def split_text_by_bytes(text, max_bytes):
-    """Helper to split text into <=5000 byte chunks"""
-    encoder = text.encode('utf-8')
-    chunks = []
-    current = ''
-    for char in text:
-        test = current + char
-        if test.encode('utf-8').__sizeof__() > max_bytes:
-            chunks.append(current)
-            current = char
-        else:
-            current = test
-    if current:
-        chunks.append(current)
-    return chunks
 
 def split_text_for_tts_safety(text, max_chars=150):
     """Additional safety function to split text for TTS compatibility"""
@@ -1037,6 +955,63 @@ def chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chun
     
     return chunks
 
+# OpenAI TTS Voice Configuration
+VOICE_OPTIONS = [
+    {'id': 'alloy', 'name': 'Alloy', 'description': 'Neutral, balanced voice', 'gender': 'Female'},
+    {'id': 'echo', 'name': 'Echo', 'description': 'Clear, professional voice', 'gender': 'Male'},
+    {'id': 'fable', 'name': 'Fable', 'description': 'Warm, storytelling voice', 'gender': 'Male'},
+    {'id': 'onyx', 'name': 'Onyx', 'description': 'Deep, authoritative voice', 'gender': 'Male'},
+    {'id': 'nova', 'name': 'Nova', 'description': 'Bright, energetic voice', 'gender': 'Female'},
+    {'id': 'shimmer', 'name': 'Shimmer', 'description': 'Soft, gentle voice', 'gender': 'Female'}
+]
+
+def get_voice_option(voice_id):
+    """Get voice option by ID"""
+    for voice in VOICE_OPTIONS:
+        if voice['id'] == voice_id:
+            return voice
+    return VOICE_OPTIONS[0]  # Default to Alloy
+
+def isValidVoiceId(voice_id):
+    """Check if voice ID is valid"""
+    return any(voice['id'] == voice_id for voice in VOICE_OPTIONS)
+
+def chunkContentForTTS(content):
+    """TTS-optimized chunking for OpenAI TTS (2000 token limit)"""
+    return chunk_content(content, 
+                        target_chunk_size=1200,  # ~1,500 tokens (safe margin)
+                        min_chunk_size=800,      # ~1,000 tokens
+                        max_chunk_size=1500,     # ~2,000 tokens (at limit)
+                        overlap_words=50)        # Reduced overlap for TTS
+
+def generate_openai_tts_audio(text, voice_id, job_id):
+    """Generate TTS audio using OpenAI TTS API"""
+    try:
+        print(f'Job {job_id}: Generating OpenAI TTS audio with voice: {voice_id}')
+        
+        # Validate voice ID
+        if not isValidVoiceId(voice_id):
+            print(f'Job {job_id}: Invalid voice ID {voice_id}, using default: alloy')
+            voice_id = 'alloy'
+        
+        # Generate audio using OpenAI TTS
+        response = client.audio.speech.create(
+            model="gpt-4o-mini-tts",
+            voice=voice_id,
+            input=text,
+            response_format="mp3"
+        )
+        
+        if not response.content:
+            raise Exception('No audio content returned from OpenAI TTS')
+        
+        print(f'Job {job_id}: ✅ OpenAI TTS completed successfully')
+        return response.content
+        
+    except Exception as e:
+        print(f'Job {job_id}: ❌ OpenAI TTS failed: {str(e)}')
+        raise e
+
 def generate_podcast_script_chunk(content, chunk_index, total_chunks):
     """Generate podcast-style script for a single chunk"""
     if not client:
@@ -1132,7 +1107,7 @@ def generate_podcast_script(content):
     return combined_script
 
 @celery_app.task(bind=True)
-def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', audio_style='single_speaker', pages_data=None):
+def generate_audio_job(self, job_id, document_id, user_id, voice='alloy', audio_style='single_speaker', pages_data=None):
     """Generate audio from document content using background processing with multiple style options and page-based chunking"""
     try:
         print(f'Job {job_id}: Starting audio generation for document {document_id} with style: {audio_style}')
@@ -1222,14 +1197,7 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             }
         )
         
-        # Initialize Google TTS
-        if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
-            key_path = '/tmp/google-tts-key.json'
-            with open(key_path, 'w') as f:
-                f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
-        
-        client_tts = texttospeech.TextToSpeechClient()
+        # Initialize OpenAI TTS (no additional setup needed)
         audio_buffers = []
         
         # Process each page script through TTS
@@ -1262,37 +1230,31 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
             print(f'Job {job_id}: Processing entire page {page_number} through TTS...')
             
             try:
-                print(f'Job {job_id}: Calling Google TTS API for page {page_number}...')
+                print(f'Job {job_id}: Calling OpenAI TTS API for page {page_number}...')
                 
                 # For 2-speaker podcast, use the specialized multi-speaker function
                 if audio_style == '2speaker_podcast':
                     print(f'Job {job_id}: Using 2-speaker podcast TTS processing for page {page_number}...')
                     print(f'Job {job_id}: 🔍 DEBUG - Script to process: {cleaned_script[:300]}...')
                     # Use the multi-speaker TTS function for 2-speaker podcast
-                    voice_female = 'en-US-Studio-O' if voice == 'en-US-Studio-Q' else 'en-US-Studio-Q'
+                    voice_female = 'alloy' if voice == 'echo' else 'echo'  # Map to OpenAI voices
                     page_audio = generate_2speaker_tts_audio(cleaned_script, voice, voice_female, job_id)
                     audio_buffers.append(page_audio)
                     print(f'Job {job_id}: ✅ Page {page_number} 2-speaker TTS completed successfully')
                     continue
                 else:
-                    # Single speaker - use regular TTS
-                    current_voice = voice
-                    current_gender = texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
+                    # Single speaker - use OpenAI TTS
+                    # Convert old Google voice names to OpenAI voice names
+                    if voice == 'en-US-Studio-Q':
+                        current_voice = 'echo'
+                    elif voice == 'en-US-Studio-O':
+                        current_voice = 'alloy'
+                    else:
+                        current_voice = voice if isValidVoiceId(voice) else 'alloy'
                 
-                response_tts = client_tts.synthesize_speech({
-                    'input': {'text': cleaned_script},
-                    'voice': {
-                        'language_code': 'en-US',
-                        'name': current_voice,
-                        'ssml_gender': current_gender
-                    },
-                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-                })
-                
-                if not response_tts.audio_content:
-                    raise Exception('No audio content returned from Google TTS')
-                
-                audio_buffers.append(response_tts.audio_content)
+                # Generate audio using OpenAI TTS
+                page_audio = generate_openai_tts_audio(cleaned_script, current_voice, job_id)
+                audio_buffers.append(page_audio)
                 print(f'Job {job_id}: ✅ Page {page_number} TTS completed successfully')
                 
             except Exception as tts_error:
@@ -1387,49 +1349,33 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q
         }
 
 def generate_single_speaker_tts(final_text, voice, job_id):
-    """Generate TTS audio for single speaker (existing logic)"""
-    # Initialize Google TTS
-    # Write TTS credentials to file if GOOGLE_TTS_CREDENTIALS_JSON is set
-    if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
-        key_path = '/tmp/google-tts-key.json'
-        with open(key_path, 'w') as f:
-            f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
+    """Generate TTS audio for single speaker using OpenAI TTS"""
+    # Convert old Google voice names to OpenAI voice names
+    if voice == 'en-US-Studio-Q':
+        current_voice = 'echo'
+    elif voice == 'en-US-Studio-O':
+        current_voice = 'alloy'
+    else:
+        current_voice = voice if isValidVoiceId(voice) else 'alloy'
     
-    client_tts = texttospeech.TextToSpeechClient()
-    
-    # Additional safety: split into TTS-friendly character chunks first
-    text_chunks = split_text_for_tts_safety(final_text, 150)
-    
-    # Further split into TTS-friendly byte chunks
-    final_text_chunks = []
-    for text_chunk in text_chunks:
-        byte_chunks = split_text_by_bytes(text_chunk, 5000)
-        final_text_chunks.extend(byte_chunks)
+    # Use TTS-optimized chunking for OpenAI TTS
+    chunks = chunkContentForTTS(final_text)
     
     audio_buffers = []
     
-    for chunk in final_text_chunks:
-        response_tts = client_tts.synthesize_speech({
-            'input': {'text': chunk},
-            'voice': {
-                'language_code': 'en-US',
-                'name': voice,
-                'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-            },
-            'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-        })
-        
-        if not response_tts.audio_content:
-            raise Exception('No audio content returned from Google TTS')
-        
-        audio_buffers.append(response_tts.audio_content)
+    for chunk in chunks:
+        try:
+            chunk_audio = generate_openai_tts_audio(chunk['content'], current_voice, job_id)
+            audio_buffers.append(chunk_audio)
+        except Exception as e:
+            print(f'Job {job_id}: ❌ Failed to generate audio for chunk: {str(e)}')
+            continue
     
     audio_buffer = b''.join(audio_buffers)
     return audio_buffer
 
 @celery_app.task(bind=True)
-def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-Studio-Q', pages_data=None):
+def generate_reading_audio_job(self, job_id, document_id, user_id, voice='alloy', pages_data=None):
     """Generate reading companion audio from document content using actual page-based chunking"""
     try:
         print(f'Job {job_id}: Starting reading companion audio generation for document {document_id}')
@@ -1504,14 +1450,7 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             }
         )
         
-        # Initialize Google TTS
-        if os.getenv('GOOGLE_TTS_CREDENTIALS_JSON') and not os.getenv('GOOGLE_APPLICATION_CREDENTIALS'):
-            key_path = '/tmp/google-tts-key.json'
-            with open(key_path, 'w') as f:
-                f.write(os.getenv('GOOGLE_TTS_CREDENTIALS_JSON'))
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = key_path
-        
-        client_tts = texttospeech.TextToSpeechClient()
+        # Initialize OpenAI TTS (no additional setup needed)
         audio_buffers = []
         
         # Process each chunk/page through TTS
@@ -1550,23 +1489,19 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='en-US-
             print(f'Job {job_id}: Processing entire {chunk_info} through TTS...')
             
             try:
-                print(f'Job {job_id}: Calling Google TTS API for {chunk_info}...')
+                print(f'Job {job_id}: Calling OpenAI TTS API for {chunk_info}...')
                 
-                # Simple TTS call with better error handling
-                response_tts = client_tts.synthesize_speech({
-                    'input': {'text': chunk_text},
-                    'voice': {
-                        'language_code': 'en-US',
-                        'name': voice,
-                        'ssml_gender': texttospeech.SsmlVoiceGender.MALE if voice == 'en-US-Studio-Q' else texttospeech.SsmlVoiceGender.FEMALE
-                    },
-                    'audio_config': {'audio_encoding': texttospeech.AudioEncoding.MP3},
-                })
+                # Convert old Google voice names to OpenAI voice names
+                if voice == 'en-US-Studio-Q':
+                    current_voice = 'echo'
+                elif voice == 'en-US-Studio-O':
+                    current_voice = 'alloy'
+                else:
+                    current_voice = voice if isValidVoiceId(voice) else 'alloy'
                 
-                if not response_tts.audio_content:
-                    raise Exception('No audio content returned from Google TTS')
-                
-                audio_buffers.append(response_tts.audio_content)
+                # Generate audio using OpenAI TTS
+                chunk_audio = generate_openai_tts_audio(chunk_text, current_voice, job_id)
+                audio_buffers.append(chunk_audio)
                 print(f'Job {job_id}: ✅ {chunk_info} TTS completed successfully')
                 
             except Exception as tts_error:
