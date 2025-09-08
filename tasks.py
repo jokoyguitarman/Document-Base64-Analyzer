@@ -272,14 +272,14 @@ def generate_2speaker_podcast_script(content):
     # Check if content is small enough to process in one go
     word_count = count_words(content)
     
-    if word_count <= 4000:
+    if word_count <= 1200:
         # Small content - process directly
         return generate_2speaker_podcast_script_chunk(content, 0, 1)
 
     # Large content - use chunking
     print(f'Content is {word_count} words, using chunking system for 2-speaker podcast...')
     
-    chunks = chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+    chunks = chunk_content(content, target_chunk_size=1200, min_chunk_size=800, max_chunk_size=1500, overlap_words=50)
 
     print(f'Split content into {len(chunks)} chunks for 2-speaker podcast')
 
@@ -877,7 +877,7 @@ def find_natural_breaks(text):
     
     return sorted(breaks)
 
-def chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100):
+def chunk_content(content, target_chunk_size=1200, min_chunk_size=800, max_chunk_size=1500, overlap_words=50):
     """Intelligent content chunking function"""
     if not content or not content.strip():
         return []
@@ -1081,14 +1081,14 @@ def generate_podcast_script(content):
     # Check if content is small enough to process in one go
     word_count = count_words(content)
     
-    if word_count <= 4000:
+    if word_count <= 1200:
         # Small content - process directly
         return generate_podcast_script_chunk(content, 0, 1)
 
     # Large content - use chunking
     print(f'Content is {word_count} words, using chunking system...')
     
-    chunks = chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chunk_size=4000, overlap_words=100)
+    chunks = chunk_content(content, target_chunk_size=1200, min_chunk_size=800, max_chunk_size=1500, overlap_words=50)
 
     print(f'Split content into {len(chunks)} chunks')
 
