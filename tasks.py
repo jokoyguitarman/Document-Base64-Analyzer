@@ -955,14 +955,19 @@ def chunk_content(content, target_chunk_size=3000, min_chunk_size=1000, max_chun
     
     return chunks
 
-# OpenAI TTS Voice Configuration
+# GPT-4o Mini TTS Voice Configuration - All 11 Available Voices
 VOICE_OPTIONS = [
-    {'id': 'alloy', 'name': 'Alloy', 'description': 'Neutral, balanced voice', 'gender': 'Female'},
-    {'id': 'echo', 'name': 'Echo', 'description': 'Clear, professional voice', 'gender': 'Male'},
-    {'id': 'fable', 'name': 'Fable', 'description': 'Warm, storytelling voice', 'gender': 'Male'},
-    {'id': 'onyx', 'name': 'Onyx', 'description': 'Deep, authoritative voice', 'gender': 'Male'},
-    {'id': 'nova', 'name': 'Nova', 'description': 'Bright, energetic voice', 'gender': 'Female'},
-    {'id': 'shimmer', 'name': 'Shimmer', 'description': 'Soft, gentle voice', 'gender': 'Female'}
+    {'id': 'alloy', 'name': 'Alloy', 'description': 'Neutral, versatile voice suitable for most content', 'gender': 'Female', 'category': 'General'},
+    {'id': 'ash', 'name': 'Ash', 'description': 'Calm, soothing voice ideal for relaxation content', 'gender': 'Male', 'category': 'Calm'},
+    {'id': 'ballad', 'name': 'Ballad', 'description': 'Melodic, musical voice perfect for artistic content', 'gender': 'Male', 'category': 'Artistic'},
+    {'id': 'coral', 'name': 'Coral', 'description': 'Bright, energetic voice for dynamic content', 'gender': 'Female', 'category': 'Energetic'},
+    {'id': 'echo', 'name': 'Echo', 'description': 'Deep, resonant voice ideal for authoritative content', 'gender': 'Male', 'category': 'Professional'},
+    {'id': 'fable', 'name': 'Fable', 'description': 'Warm, storytelling voice perfect for narratives', 'gender': 'Female', 'category': 'Storytelling'},
+    {'id': 'nova', 'name': 'Nova', 'description': 'Friendly, approachable voice for casual content', 'gender': 'Female', 'category': 'Friendly'},
+    {'id': 'onyx', 'name': 'Onyx', 'description': 'Authoritative, professional voice for business content', 'gender': 'Male', 'category': 'Professional'},
+    {'id': 'sage', 'name': 'Sage', 'description': 'Wise, thoughtful voice for educational content', 'gender': 'Female', 'category': 'Educational'},
+    {'id': 'shimmer', 'name': 'Shimmer', 'description': 'Cheerful, optimistic voice for upbeat content', 'gender': 'Female', 'category': 'Upbeat'},
+    {'id': 'verse', 'name': 'Verse', 'description': 'Poetic, lyrical voice for artistic expression', 'gender': 'Male', 'category': 'Artistic'}
 ]
 
 def get_voice_option(voice_id):
@@ -985,7 +990,7 @@ def chunkContentForTTS(content):
                         overlap_words=50)        # Reduced overlap for TTS
 
 def generate_openai_tts_audio(text, voice_id, job_id):
-    """Generate TTS audio using OpenAI TTS API"""
+    """Generate TTS audio using OpenAI TTS API with professional expert tone"""
     try:
         print(f'Job {job_id}: Generating OpenAI TTS audio with voice: {voice_id}')
         
@@ -994,11 +999,15 @@ def generate_openai_tts_audio(text, voice_id, job_id):
             print(f'Job {job_id}: Invalid voice ID {voice_id}, using default: alloy')
             voice_id = 'alloy'
         
-        # Generate audio using OpenAI TTS
+        # Professional expert tone instructions
+        tone_instructions = "Voice: Clear, enthusiastic, and composed, projecting confidence and professionalism. Tone: Expert, passionate about the subject matter, joyful to share knowledge and informative, maintaining a balance between formality and approachability. Punctuation: Structured with commas and pauses for clarity, ensuring information is digestible and well-paced. Delivery: Steady and measured, with slight emphasis on key figures and deadlines to highlight critical points."
+        
+        # Generate audio using OpenAI TTS with tone instructions
         response = client.audio.speech.create(
             model="gpt-4o-mini-tts",
             voice=voice_id,
             input=text,
+            instructions=tone_instructions,
             response_format="mp3"
         )
         
@@ -1243,14 +1252,8 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='alloy', audio_
                     print(f'Job {job_id}: ✅ Page {page_number} 2-speaker TTS completed successfully')
                     continue
                 else:
-                    # Single speaker - use OpenAI TTS
-                    # Convert old Google voice names to OpenAI voice names
-                    if voice == 'en-US-Studio-Q':
-                        current_voice = 'echo'
-                    elif voice == 'en-US-Studio-O':
-                        current_voice = 'alloy'
-                    else:
-                        current_voice = voice if isValidVoiceId(voice) else 'alloy'
+                    # Single speaker - use GPT-4o Mini TTS
+                    current_voice = voice if isValidVoiceId(voice) else 'alloy'
                 
                 # Generate audio using OpenAI TTS
                 page_audio = generate_openai_tts_audio(cleaned_script, current_voice, job_id)
@@ -1349,14 +1352,9 @@ def generate_audio_job(self, job_id, document_id, user_id, voice='alloy', audio_
         }
 
 def generate_single_speaker_tts(final_text, voice, job_id):
-    """Generate TTS audio for single speaker using OpenAI TTS"""
-    # Convert old Google voice names to OpenAI voice names
-    if voice == 'en-US-Studio-Q':
-        current_voice = 'echo'
-    elif voice == 'en-US-Studio-O':
-        current_voice = 'alloy'
-    else:
-        current_voice = voice if isValidVoiceId(voice) else 'alloy'
+    """Generate TTS audio for single speaker using GPT-4o Mini TTS"""
+    # Use GPT-4o Mini TTS voice directly - no mapping needed
+    current_voice = voice if isValidVoiceId(voice) else 'alloy'
     
     # Use TTS-optimized chunking for OpenAI TTS
     chunks = chunkContentForTTS(final_text)
@@ -1491,13 +1489,8 @@ def generate_reading_audio_job(self, job_id, document_id, user_id, voice='alloy'
             try:
                 print(f'Job {job_id}: Calling OpenAI TTS API for {chunk_info}...')
                 
-                # Convert old Google voice names to OpenAI voice names
-                if voice == 'en-US-Studio-Q':
-                    current_voice = 'echo'
-                elif voice == 'en-US-Studio-O':
-                    current_voice = 'alloy'
-                else:
-                    current_voice = voice if isValidVoiceId(voice) else 'alloy'
+                # Use GPT-4o Mini TTS voice directly
+                current_voice = voice if isValidVoiceId(voice) else 'alloy'
                 
                 # Generate audio using OpenAI TTS
                 chunk_audio = generate_openai_tts_audio(chunk_text, current_voice, job_id)
